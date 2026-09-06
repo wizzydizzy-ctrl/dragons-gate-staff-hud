@@ -46,9 +46,13 @@ end
 function Adapter:createChatStorage(visibleLimit) return Storage.new(Storage.mudletApi(),getMudletHomeDir().."/DragonsGateHUD/chat",visibleLimit) end
 function Adapter:saveMapDiagnostic(payload)
   local base=getMudletHomeDir().."/DragonsGateHUD"; lfs.mkdir(base); local directory=base.."/diagnostics"; lfs.mkdir(directory)
-  local path=directory.."/mapper-"..os.date("%Y%m%d-%H%M%S")..".txt"; local file,err=io.open(path,"wb"); if not file then return nil,err end; local ok,writeErr=file:write(tostring(payload or "")); if not ok then file:close(); return nil,writeErr end; file:close(); return path
+  local path=directory.."/mapper-"..os.date("%Y%m%d-%H%M%S")..".txt"; local file,err=io.open(path,"wb"); if not file then return nil,err end
+  local ok,writeErr=file:write(tostring(payload or "")); if not ok then file:close(); return nil,writeErr end; file:close(); return path
 end
-function Adapter:openMapDiagnosticsFolder() local base=getMudletHomeDir().."/DragonsGateHUD"; lfs.mkdir(base); local directory=base.."/diagnostics"; lfs.mkdir(directory); if type(openUrl)=="function" then pcall(openUrl,"file://"..directory) end; return directory end
+function Adapter:openMapDiagnosticsFolder()
+  local base=getMudletHomeDir().."/DragonsGateHUD"; lfs.mkdir(base); local directory=base.."/diagnostics"; lfs.mkdir(directory)
+  if type(openUrl)=="function" then pcall(openUrl,"file://"..directory) end; return directory
+end
 function Adapter:addEvent(name,fn) return registerAnonymousEventHandler(name,fn) end
 function Adapter:killEvent(id) return killAnonymousEventHandler(id) end
 function Adapter:addAlias(pattern,fn) return tempAlias(pattern,fn) end
@@ -152,7 +156,7 @@ local function libraryRead(path,limit)
 end
 function Adapter:fetchMapCatalog(done)
   if type(done)~="function" then return nil,"catalog callback is required" end; if type(downloadFile)~="function" then return nil,"Mudlet download integration is unavailable" end
-  local directory,dirErr=self:mapTransferDirectory(); if not directory then return nil,dirErr end; local path=directory.."/.catalog-download.json"; local url="https://raw.githubusercontent.com/wizzydizzy-ctrl/dragons-gate-map-library/main/catalog.json?dghud="..tostring(os.time()); local ids={}; local timer; local finished=false
+  local directory,dirErr=self:mapTransferDirectory(); if not directory then return nil,dirErr end; local path=directory.."/.catalog-download.json"; local url="https://raw.githubusercontent.com/wizzydizzy-ctrl/dragons-gate-map-library/main/catalog-v2.json?dghud="..tostring(os.time()); local ids={}; local timer; local finished=false
   local function cleanup() for _,id in ipairs(ids) do killAnonymousEventHandler(id) end; if timer then killTimer(timer) end; os.remove(path) end
   local function finish(value,err) if finished then return end; finished=true; cleanup(); done(value,err) end
   ids[#ids+1]=registerAnonymousEventHandler("sysDownloadDone",function(_,actual) if actual~=path then return end; local raw,readErr=libraryRead(path,1048576); if not raw then return finish(nil,readErr) end; local ok,value=pcall(yajl.to_value,raw); if not ok then return finish(nil,"catalog JSON is invalid") end; finish(value) end)
@@ -184,7 +188,7 @@ function Adapter:publishMap(data,done)
 end
 local function urlEncode(value) return tostring(value or ""):gsub("\n","%%0A"):gsub("([^%w%-_%.~%%])",function(char) return string.format("%%%02X",string.byte(char)) end) end
 function Adapter:openFeedback(title,body)
-  local url="https://github.com/wizzydizzy-ctrl/dragons-gate-staff-hud/issues/new?template=feedback.yml"
+  local url="https://github.com/wizzydizzy-ctrl/dragons-gate-player-hud/issues/new?template=feedback.yml"
   if title or body then url=url.."&title="..urlEncode(title).."&body="..urlEncode(body) end
   if type(openUrl)~="function" then return nil,"Mudlet browser integration is unavailable" end; openUrl(url); return url
 end
@@ -247,7 +251,8 @@ function Adapter:saveMapperSettings(config)
   local body=string.format("return { enabled=%s, minimum_height=%g, height_percent=%g, maximum_height=%g, zoom_step=%g, zoom_min=%g, zoom_max=%g, walk_timeout=%g, special_timeout=%g, transition_submaps={gate=%s,portal=%s,door=%s,arch=%s,path=%s,other=%s} }\n",tostring(not (config and config.enabled==false)),n("minimum_height",90),n("height_percent",.4),n("maximum_height",380),n("zoom_step",2.5),n("zoom_min",3),n("zoom_max",60),n("walk_timeout",12),n("special_timeout",12),tostring(transitions.gate~=false),tostring(transitions.portal~=false),tostring(transitions.door~=false),tostring(transitions.arch~=false),tostring(transitions.path~=false),tostring(transitions.other~=false))
   local wrote,writeErr=file:write(body); if not wrote then file:close(); os.remove(temp); return nil,writeErr end
   local closed,closeErr=file:close(); if closed==nil then os.remove(temp); return nil,closeErr end
-  local backup=destination..".bak"; os.remove(backup); local existing=io.open(destination,"rb"); if existing then existing:close(); local moved,moveErr=os.rename(destination,backup); if not moved then os.remove(temp); return nil,moveErr end end
+  local backup=destination..".bak"; os.remove(backup)
+  local existing=io.open(destination,"rb"); if existing then existing:close(); local moved,moveErr=os.rename(destination,backup); if not moved then os.remove(temp); return nil,moveErr end end
   local ok,renameErr=os.rename(temp,destination); if not ok then os.rename(backup,destination); return nil,renameErr end; os.remove(backup); return true
 end
 function Adapter.loadMapperSettings()
