@@ -3,10 +3,13 @@ local Parser=require("chat_parser")
 local History=require("chat_history")
 
 local function fake(entries)
-  local f={next=0,triggers={},storageAppends=0,storageClears=0,storageEntries=entries or {},storedCharacters={},errors=0,epochValue=100,timestampValue="2026-08-31T13:00:00-04:00",character="Dace Alterac",loadRecentCalls=0,loadedCharacterKeys={}}
+  local f={next=0,triggers={},timers={},storageAppends=0,storageClears=0,storageEntries=entries or {},storedCharacters={},errors=0,epochValue=100,timestampValue="2026-08-31T13:00:00-04:00",character="Dace Alterac",loadRecentCalls=0,loadedCharacterKeys={}}
   function f:addLineTrigger(fn) if self.triggerFailure then error(self.triggerFailure) end; self.next=self.next+1; local id="trigger-"..self.next; self.triggers[id]=fn; return id end
   function f:killTrigger(id) self.triggers[id]=nil end
   function f:line(value) for _,fn in pairs(self.triggers) do fn(value) end end
+  function f:schedule(_,fn) self.next=self.next+1; local id="timer-"..self.next; self.timers[id]=fn; return id end
+  function f:cancelTimer(id) self.timers[id]=nil; return true end
+  function f:fireTimer() local id,fn=next(self.timers); if id then self.timers[id]=nil; fn() end end
   function f:count(value) local total=0; for _ in pairs(value) do total=total+1 end; return total end
   function f:epoch() return self.epochValue end
   function f:timestamp() return self.timestampValue end
@@ -75,6 +78,36 @@ test("GUIDE assistance cancellations flow through the owned trigger into staff c
   local entries=controller:entries()
   eq(#entries,1); eq(entries[1].category,"STAFF"); eq(entries[1].speaker,"Wizzy Dizzy"); eq(entries[1].line,line)
   eq(f.storageAppends,1)
+end)
+
+test("GM idea submissions flow through the owned trigger into staff chat",function()
+  local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("STAFF"))
+  local first="[GM] Vaeltherion [forhekset] submits an idea: I would like a system where I can lock my equipment onto my body so I do not mix up items"
+  f:line(first); f:line("with those that I want to sell, break, or drop on the ground."); f:line('"Lock bluesteel gauntlets" could ask for confirmation.'); f:line(">")
+  local entries=controller:entries()
+  eq(#entries,1); eq(entries[1].category,"STAFF"); eq(entries[1].speaker,"Vaeltherion")
+  eq(entries[1].message,'submits an idea: I would like a system where I can lock my equipment onto my body so I do not mix up items with those that I want to sell, break, or drop on the ground. "Lock bluesteel gauntlets" could ask for confirmation.')
+  eq(entries[1].line,first..' with those that I want to sell, break, or drop on the ground. "Lock bluesteel gauntlets" could ask for confirmation.'); eq(f.storageAppends,1)
+end)
+
+test("GM idea buffering stops before the next staff message and flushes on inactivity",function()
+  local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("STAFF"))
+  f:line("[GM] Vlio [alexocalypse] submits an idea: Make dark street dark during the day")
+  f:line("when the room should be shadowed.")
+  f:line("[GM] Aeron: I agree")
+  local entries=controller:entries(); eq(#entries,2); eq(entries[1].speaker,"Vlio"); eq(entries[2].speaker,"Aeron")
+  f:line("[GM] Vaeltherion [forhekset] submits an idea: Another idea")
+  eq(#controller:entries(),2); f:fireTimer(); eq(#controller:entries(),3); eq(controller:entries()[3].message,"submits an idea: Another idea")
+end)
+
+test("GM idea buffering stops at a room title and shutdown preserves it once",function()
+  local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("STAFF"))
+  f:line("[GM] Vlio [alexocalypse] submits an idea: Keep this idea")
+  f:line("with its continuation.")
+  f:line("[Old Cemetery.]")
+  eq(#controller:entries(),1); eq(f.storageAppends,1)
+  f:line("[GM] Vlio [alexocalypse] submits an idea: Preserve during shutdown")
+  controller:shutdown(); eq(#controller:entries(),2); eq(f.storageAppends,2); eq(next(f.timers),nil)
 end)
 
 test("targeted asks are captured and visible in the room tab",function()
