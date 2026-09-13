@@ -3,9 +3,9 @@ Controller.__index=Controller
 
 local HANDOFF_SCHEMA=1
 local MAX_HANDOFF_ENTRIES=1000
-local IDEA_FLUSH_DELAY=.4
-local IDEA_MAX_LINES=20
-local IDEA_MAX_CHARS=4000
+local STAFF_MESSAGE_FLUSH_DELAY=.4
+local STAFF_MESSAGE_MAX_LINES=20
+local STAFF_MESSAGE_MAX_CHARS=4000
 
 local function copyEntries(entries)
   local source=type(entries)=="table" and entries or {}
@@ -89,62 +89,64 @@ local function cleanLine(value)
   return value
 end
 
-local function ideaEntry(entry)
-  return type(entry)=="table" and entry.category=="STAFF" and tostring(entry.message or ""):match("^submits an idea:")~=nil
+local function bufferedStaffEntry(entry)
+  if type(entry)~="table" or entry.category~="STAFF" then return false end
+  local message=tostring(entry.message or "")
+  return message:match("^submits an idea:")~=nil or message:match("^reports a bug in room %d+:")~=nil
 end
 
-local function ideaBoundary(line,parsed)
+local function staffMessageBoundary(line,parsed)
   if parsed then return true end
   line=cleanLine(line)
   return line=="" or line:match("^>")~=nil or line:match("^%[[^%]]+%]")~=nil
 end
 
-function Controller:cancelIdeaTimer()
-  local timer=self.ideaTimer; self.ideaTimer=nil
+function Controller:cancelStaffMessageTimer()
+  local timer=self.staffMessageTimer; self.staffMessageTimer=nil
   if timer then call(self.adapter,"cancelTimer",timer) end
 end
 
-function Controller:flushIdea()
-  self:cancelIdeaTimer()
-  local entry=self.pendingIdea; self.pendingIdea=nil; self.pendingIdeaLines=nil
+function Controller:flushStaffMessage()
+  self:cancelStaffMessageTimer()
+  local entry=self.pendingStaffMessage; self.pendingStaffMessage=nil; self.pendingStaffMessageLines=nil
   if not entry then return false end
   return self:accept(entry)
 end
 
-function Controller:scheduleIdeaFlush()
-  self:cancelIdeaTimer()
-  local timer=call(self.adapter,"schedule",IDEA_FLUSH_DELAY,function()
-    self.ideaTimer=nil
-    if self.started then self:flushIdea() end
+function Controller:scheduleStaffMessageFlush()
+  self:cancelStaffMessageTimer()
+  local timer=call(self.adapter,"schedule",STAFF_MESSAGE_FLUSH_DELAY,function()
+    self.staffMessageTimer=nil
+    if self.started then self:flushStaffMessage() end
   end)
-  if not timer then return self:flushIdea() end
-  self.ideaTimer=timer
+  if not timer then return self:flushStaffMessage() end
+  self.staffMessageTimer=timer
   return true
 end
 
-function Controller:beginIdea(entry)
-  self.pendingIdea=entry; self.pendingIdeaLines=1
-  return self:scheduleIdeaFlush()
+function Controller:beginStaffMessage(entry)
+  self.pendingStaffMessage=entry; self.pendingStaffMessageLines=1
+  return self:scheduleStaffMessageFlush()
 end
 
-function Controller:appendIdea(line)
+function Controller:appendStaffMessage(line)
   local text=cleanLine(line)
-  if text=="" then return self:flushIdea() end
-  local entry=self.pendingIdea
-  entry.message=(entry.message.." "..text):sub(1,IDEA_MAX_CHARS)
-  entry.line=(entry.line.." "..text):sub(1,IDEA_MAX_CHARS)
-  self.pendingIdeaLines=(self.pendingIdeaLines or 1)+1
-  if self.pendingIdeaLines>=IDEA_MAX_LINES or #entry.message>=IDEA_MAX_CHARS then return self:flushIdea() end
-  return self:scheduleIdeaFlush()
+  if text=="" then return self:flushStaffMessage() end
+  local entry=self.pendingStaffMessage
+  entry.message=(entry.message.." "..text):sub(1,STAFF_MESSAGE_MAX_CHARS)
+  entry.line=(entry.line.." "..text):sub(1,STAFF_MESSAGE_MAX_CHARS)
+  self.pendingStaffMessageLines=(self.pendingStaffMessageLines or 1)+1
+  if self.pendingStaffMessageLines>=STAFF_MESSAGE_MAX_LINES or #entry.message>=STAFF_MESSAGE_MAX_CHARS then return self:flushStaffMessage() end
+  return self:scheduleStaffMessageFlush()
 end
 
 function Controller:acceptParsed(entry)
-  if ideaEntry(entry) then return self:beginIdea(entry) end
+  if bufferedStaffEntry(entry) then return self:beginStaffMessage(entry) end
   return self:accept(entry)
 end
 
 function Controller:handoff()
-  self:flushIdea()
+  self:flushStaffMessage()
   return {
     schema=HANDOFF_SCHEMA,
     character_key=validStorageKey(self.currentCharacterKey),
@@ -198,13 +200,13 @@ end
 function Controller:onLine(line)
   if not self.started then return nil,"chatbox is not running" end
   local entry=self.parser.parse(line,self:character(),call(self.adapter,"timestamp"))
-  if self.pendingIdea then
-    if ideaBoundary(line,entry) then
-      self:flushIdea()
+  if self.pendingStaffMessage then
+    if staffMessageBoundary(line,entry) then
+      self:flushStaffMessage()
       if entry then return self:acceptParsed(entry) end
       return false
     end
-    return self:appendIdea(line)
+    return self:appendStaffMessage(line)
   end
   if entry then return self:acceptParsed(entry) end
   return false
@@ -249,7 +251,7 @@ function Controller:clearSavedHistory(confirmed)
 end
 
 function Controller:shutdown()
-  self:flushIdea()
+  self:flushStaffMessage()
   self.started=false
   local trigger=self.trigger; self.trigger=nil; local storage=self.storage
   if trigger then call(self.adapter,"killTrigger",trigger) end

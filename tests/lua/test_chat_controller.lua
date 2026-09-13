@@ -80,6 +80,16 @@ test("GUIDE assistance cancellations flow through the owned trigger into staff c
   eq(f.storageAppends,1)
 end)
 
+test("wrapped GM bug reports flow through the owned trigger as one staff entry",function()
+  local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("STAFF"))
+  local first="[GM] Vaeltherion [forhekset] reports a bug in room 10532: Traveling Drag-al Merchants have spawned in the hunting area .. and all the mobs are gone. And I can't"
+  f:line(first); f:line("finish the hunt or find the original creatures."); f:line(">")
+  local entries=controller:entries()
+  eq(#entries,1); eq(entries[1].speaker,"Vaeltherion")
+  eq(entries[1].message,"reports a bug in room 10532: Traveling Drag-al Merchants have spawned in the hunting area .. and all the mobs are gone. And I can't finish the hunt or find the original creatures.")
+  eq(f.storageAppends,1); eq(next(f.timers),nil)
+end)
+
 test("GM idea submissions flow through the owned trigger into staff chat",function()
   local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("STAFF"))
   local first="[GM] Vaeltherion [forhekset] submits an idea: I would like a system where I can lock my equipment onto my body so I do not mix up items"
