@@ -38,6 +38,8 @@ local function fake()
     setColorOptions=function(self,options) f.viewColorOptions=options; f.viewColorEnabled=options.enabled end,
     setColorEnabled=function(self,enabled) f.viewColorEnabled=enabled end,
     setOptionsActionCallback=function(self,callback) f.optionsActionCallback=callback end,
+    setStarterUIStatusCallback=function(self,callback) f.starterUIStatusCallback=callback end,
+    setStarterUIState=function(self,off,available) f.viewStarterUIOff=off; f.starterUIAvailable=available end,
     setMainInputAligned=function(self,enabled) f.viewInputAligned=enabled end,
     setChatAllSources=function(self,sources) f.viewChatAllSources=sources; return true end,
     setChatVisible=function(self,visible) self.chat_visible=visible; f.viewChatVisible=visible; f.chatVisibilitySets=(f.chatVisibilitySets or 0)+1; return visible end,
@@ -92,6 +94,8 @@ local function fake()
   function f:timestamp() return self.timestampValue or "2026-08-31T13:00:00-04:00" end
   function f:reportChatErrorOnce() self.chatErrors=(self.chatErrors or 0)+1 end
   function f:reportCommandError(message) self.commandErrors=self.commandErrors or {}; self.commandErrors[#self.commandErrors+1]=message; return true end
+  function f:starterUIState() return MudletAdapter.starterUIState(self,self.baseui_api or {}) end
+  function f:setStarterUIOff(off) return MudletAdapter.setStarterUIOff(self,off,self.baseui_api or {}) end
   function f:createChatStorage(visibleLimit)
     f.chatVisibleLimit=visibleLimit
     f.chatEntries=f.chatEntries or {}; local storage={entries=f.chatEntries}
@@ -200,6 +204,16 @@ local function fake()
   function f:reportMapperStatus(kind,message) self.mapperStatuses=self.mapperStatuses or {}; self.mapperStatuses[#self.mapperStatuses+1]={kind,message} end
   return f
 end
+local function starterUI(hidden,standingAside)
+  local base={settings={hidden=hidden,standingAside=standingAside},aside_calls=0,hide_calls=0,show_calls=0}
+  function base.standAside(source,packageName)
+    eq(source,nil); eq(packageName,"DragonsGateHUD")
+    base.aside_calls=base.aside_calls+1; base.settings.standingAside=packageName
+  end
+  function base.hide() base.hide_calls=base.hide_calls+1; base.settings.hidden=true end
+  function base.show() base.show_calls=base.show_calls+1; base.settings.hidden=false; base.settings.standingAside=nil end
+  return base
+end
 
 test("runtime synchronizes game time ticks header clock and removes its owned timer",function()
   local f=fake(); local hud=Main.new(f,{layout={},chat={enabled=false},mapper={enabled=false},time={speed=2,sunrise_hour=6,sunset_hour=18},theme={background="#000",panel="#111",border="#222",text="#fff",muted="#888",accent="#da5",jade="#7b8",hp="#b54",fatigue="#8a4",gold="#db4",silver="#ccc"}})
@@ -236,6 +250,27 @@ test("Mudlet adapter suppresses the Short and Full default map information",func
     updateMap=function() updates=updates+1 end,
   }),true)
   eq(disabled[1],"Short"); eq(disabled[2],"Full"); eq(#disabled,2); eq(updates,1)
+end)
+test("Mudlet starter UI adapter calls only BaseUI methods and verifies their state",function()
+  local adapter=MudletAdapter.new(); local base=starterUI(nil)
+  local api={BaseUI=base,expandAlias=function() error("alias used") end,send=function() error("send used") end,hideWindow=function() error("window hidden") end}
+  local state,err=adapter:starterUIState(api); assert(state); eq(state.fresh,true); eq(state.off,false); eq(err,nil)
+  state=assert(adapter:setStarterUIOff(true,api)); eq(state.off,true); eq(base.aside_calls,1); eq(base.hide_calls,0); eq(base.settings.standingAside,"DragonsGateHUD"); eq(base.settings.hidden,nil)
+  state=assert(adapter:setStarterUIOff(false,api)); eq(state.off,false); eq(base.show_calls,1); eq(base.settings.hidden,false); eq(base.settings.standingAside,nil)
+  state,err=adapter:starterUIState({}); eq(state,nil); assert(err:find("unavailable",1,true))
+  state,err=adapter:setStarterUIOff(true,{}); eq(state,nil); assert(err:find("unavailable",1,true))
+end)
+test("Mudlet starter UI adapter reports package errors and unconfirmed changes",function()
+  local adapter=MudletAdapter.new(); local base=starterUI(false); local api={BaseUI=base}
+  base.standAside=function() error("package failure") end
+  local state,err=adapter:setStarterUIOff(true,api); eq(state,nil); assert(err:find("could not be changed",1,true)); eq(base.settings.hidden,false)
+  base.standAside=function() return true end
+  state,err=adapter:setStarterUIOff(true,api); eq(state,nil); assert(err:find("did not confirm",1,true)); eq(base.settings.hidden,false)
+  base.settings.hidden="bad"; state,err=adapter:setStarterUIOff(true,api); eq(state,nil); assert(err:find("state is unavailable",1,true))
+end)
+test("Mudlet starter UI uses hide only when standAside is unsupported",function()
+  local adapter=MudletAdapter.new(); local base=starterUI(nil); base.standAside=nil
+  local state=assert(adapter:setStarterUIOff(true,{BaseUI=base})); eq(state.off,true); eq(base.hide_calls,1); eq(base.settings.hidden,true)
 end)
 test("Mudlet adapter derives and applies main-console wrap from live font metrics",function()
   local applied={}; local current=77
@@ -594,6 +629,52 @@ test("Mudlet adapter centers and refreshes the native map after selecting an own
 end)
 test("startup is idempotent and shutdown owns exact runtime IDs",function()
   local f=fake(); local hud=Main.new(f,{layout={left_width=190,right_width=270}}); eq(hud:start(),true); local first=f.next; eq(hud:start(),true); eq(f.next,first); eq(hud:shutdown(),true); eq(f.deleted,1); eq(f.set_borders[1],0); eq(f.set_borders[2],0); eq(f:count(f.events),0); eq(f:count(f.aliases),0); eq(f:count(f.triggers),0); eq(f:count(f.timers),0)
+end)
+test("fresh Mudlet starter UI defaults off and its Options toggle follows actual state",function()
+  local f=fake(); local base=starterUI(nil); f.baseui_api={BaseUI=base}; local hud=Main.new(f,{layout={}}); assert(hud:start())
+  eq(base.aside_calls,1); eq(base.hide_calls,0); eq(base.settings.standingAside,"DragonsGateHUD"); eq(base.settings.hidden,nil); eq(f.viewStarterUIOff,true); eq(f.starterUIAvailable,true)
+  local layouts=#f.layouts; eq(f.optionsActionCallback("starter_ui"),true); eq(base.settings.hidden,false); eq(base.settings.standingAside,nil); eq(base.show_calls,1); eq(f.viewStarterUIOff,false); eq(#f.layouts,layouts+1)
+  assert(hud:reload()); eq(base.aside_calls,1); eq(base.settings.hidden,false); eq(f.viewStarterUIOff,false)
+  layouts=#f.layouts; eq(f.optionsActionCallback("starter_ui"),false); eq(base.settings.standingAside,"DragonsGateHUD"); eq(base.aside_calls,2); eq(f.viewStarterUIOff,true); eq(#f.layouts,layouts+1)
+  assert(hud:shutdown())
+end)
+test("explicitly shown Mudlet starter UI survives reload and update replacement",function()
+  local f=fake(); local base=starterUI(false); f.baseui_api={BaseUI=base}; local hud=Main.new(f,{layout={}}); assert(hud:start())
+  eq(base.aside_calls,0); eq(f.viewStarterUIOff,false)
+  assert(hud:reload()); eq(base.aside_calls,0); eq(base.settings.hidden,false)
+  hud.update_handoff=true; assert(hud:shutdown())
+  local replacement=Main.new(f,{layout={}}); assert(replacement:start()); eq(base.aside_calls,0); eq(base.settings.hidden,false); eq(f.viewStarterUIOff,false)
+  f.callbacks.sysLoadEvent(); eq(base.aside_calls,0); eq(base.settings.hidden,false)
+  assert(replacement:shutdown())
+end)
+test("explicitly hidden and already standing-aside Mudlet UI survive startup",function()
+  for _,base in ipairs({starterUI(true),starterUI(nil,"another-interface"),starterUI(false,"another-interface")}) do
+    local f=fake(); f.baseui_api={BaseUI=base}; local hud=Main.new(f,{layout={}}); assert(hud:start())
+    eq(base.aside_calls,0); eq(base.show_calls,0); eq(f.viewStarterUIOff,true)
+    f.callbacks.sysLoadEvent(); eq(base.aside_calls,0)
+    assert(hud:shutdown())
+  end
+end)
+test("Mudlet starter UI absence and package errors leave the toggle honest",function()
+  local f=fake(); local hud=Main.new(f,{layout={}}); assert(hud:start()); eq(f.starterUIAvailable,false)
+  local layouts=#f.layouts; local visible,err=f.optionsActionCallback("starter_ui"); eq(visible,nil); assert(err:find("unavailable",1,true)); eq(f.commandErrors[#f.commandErrors],err); eq(#f.layouts,layouts)
+  local base=starterUI(true); f.baseui_api={BaseUI=base}; f.starterUIStatusCallback(); eq(f.viewStarterUIOff,true)
+  base.show=function() error("package failure") end
+  visible,err=f.optionsActionCallback("starter_ui"); eq(visible,nil); assert(err:find("could not be changed",1,true)); eq(f.viewStarterUIOff,true); eq(base.settings.hidden,true); eq(f.commandErrors[#f.commandErrors],err)
+  layouts=#f.layouts
+  base.show=function() base.settings.hidden=false; base.settings.standingAside=nil; error("failed after showing") end
+  visible,err=f.optionsActionCallback("starter_ui"); eq(visible,nil); assert(err:find("could not be changed",1,true)); eq(f.viewStarterUIOff,false); eq(#f.layouts,layouts+1)
+  assert(hud:shutdown())
+end)
+test("Mudlet starter UI late installation defaults off only while unset",function()
+  local f=fake(); local hud=Main.new(f,{layout={}}); assert(hud:start())
+  local layouts=#f.layouts; f.callbacks.sysInstallPackage(nil,"unrelated"); eq(#f.layouts,layouts)
+  local base=starterUI(nil); f.baseui_api={BaseUI=base}
+  f.callbacks.sysInstallPackage(nil,"mudlet-base-ui"); eq(base.settings.standingAside,"DragonsGateHUD"); eq(base.aside_calls,1); eq(f.viewStarterUIOff,true); eq(#f.layouts,layouts+1)
+  base.show(); f.callbacks.sysLoadEvent(); eq(base.settings.hidden,false); eq(base.aside_calls,1); eq(f.viewStarterUIOff,false)
+  f.baseui_api={}; f.callbacks.sysInstallPackage(nil,"mudlet-base-ui"); eq(f.starterUIAvailable,false)
+  local delayed=starterUI(nil); f.baseui_api={BaseUI=delayed}; f.callbacks.sysLoadEvent(); eq(delayed.settings.standingAside,"DragonsGateHUD"); eq(delayed.aside_calls,1)
+  assert(hud:shutdown())
 end)
 test("update handoff skips only the redundant map snapshot",function()
   local previous=rawget(_G,"DGHUD")

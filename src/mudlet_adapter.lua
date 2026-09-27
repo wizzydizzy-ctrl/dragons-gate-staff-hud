@@ -186,6 +186,35 @@ function Adapter.sameDownloadPath(actual,expected)
 end
 local updateNonce=0
 function Adapter.new() return setmetatable({},Adapter) end
+function Adapter:starterUIState(api)
+  api=api or _G
+  local base=rawget(api,"BaseUI")
+  if type(base)~="table" or type(base.settings)~="table" or type(base.show)~="function" or (type(base.standAside)~="function" and type(base.hide)~="function") then
+    return nil,"Mudlet starter UI is unavailable. Install or enable the Mudlet UI package."
+  end
+  local hidden=base.settings.hidden
+  if hidden~=nil and type(hidden)~="boolean" then return nil,"Mudlet starter UI state is unavailable." end
+  local standingAside=base.settings.standingAside
+  return {hidden=hidden,standingAside=standingAside,off=hidden==true or standingAside~=nil,fresh=hidden==nil and standingAside==nil}
+end
+function Adapter:setStarterUIOff(off,api)
+  if type(off)~="boolean" then return nil,"Mudlet starter UI choice must be ON or OFF." end
+  api=api or _G
+  local state,err=self:starterUIState(api)
+  if not state then return nil,err end
+  local base=rawget(api,"BaseUI")
+  -- standAside links the HUD's package identity to BaseUI's uninstall recovery.
+  -- Older BaseUI builds can still hide their own dock through hide().
+  local called
+  if off and type(base.standAside)=="function" then called=pcall(base.standAside,nil,"DragonsGateHUD")
+  elseif off then called=pcall(base.hide)
+  else called=pcall(base.show) end
+  if not called then return nil,"Mudlet starter UI could not be changed. Check the Mudlet UI package." end
+  local actual,stateErr=self:starterUIState(api)
+  if not actual then return nil,stateErr end
+  if actual.off~=off then return nil,"Mudlet starter UI did not confirm the change." end
+  return actual
+end
 function Adapter:getBorders() return getBorderLeft(),getBorderTop(),getBorderRight(),getBorderBottom() end
 function Adapter:getWindowSize() return getMainWindowSize() end
 function Adapter:setBorders(l,t,r,b) setBorderLeft(l);setBorderTop(t);setBorderRight(r);setBorderBottom(b) end

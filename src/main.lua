@@ -1093,6 +1093,45 @@ function Main:removeMapClickHook()
   if self.speed_walk_hook and rawget(_G,"doSpeedWalk")==self.speed_walk_hook then _G.doSpeedWalk=self.previous_speed_walk end
   self.speed_walk_hook=nil; self.previous_speed_walk=nil
 end
+function Main:starterUIState()
+  local unavailable="Mudlet starter UI is unavailable. Install or enable the Mudlet UI package."
+  local called,state,err
+  if type(self.adapter.starterUIState)=="function" then called,state,err=pcall(self.adapter.starterUIState,self.adapter) end
+  if not called then state=nil; err=unavailable end
+  if self.view and self.view.setStarterUIState then self.view:setStarterUIState(state and state.off,state~=nil) end
+  return state,err
+end
+function Main:setStarterUIOff(wanted,relayout)
+  local before,readErr=self:starterUIState()
+  if not before then return nil,readErr end
+  if type(self.adapter.setStarterUIOff)~="function" then return nil,"Mudlet starter UI control is unavailable." end
+  local called,changed,changeErr=pcall(self.adapter.setStarterUIOff,self.adapter,wanted)
+  local actual,stateErr=self:starterUIState()
+  if relayout~=false and actual and actual.off~=before.off then self:applyResponsiveLayout() end
+  if not called then return nil,"Mudlet starter UI could not be changed. Check the Mudlet UI package." end
+  if changed==nil then return nil,changeErr or "Mudlet starter UI could not be changed." end
+  if not actual then return nil,stateErr end
+  if actual.off~=wanted then return nil,"Mudlet starter UI did not confirm the change." end
+  return actual
+end
+function Main:defaultStarterUI()
+  local state,err=self:starterUIState()
+  if not state or not state.fresh then return state,err end
+  return self:setStarterUIOff(true,false)
+end
+function Main:toggleStarterUI()
+  local state,err=self:starterUIState()
+  if not state then
+    if self.adapter.reportCommandError then self.adapter:reportCommandError(err) end
+    return nil,err
+  end
+  local changed,changeErr=self:setStarterUIOff(not state.off)
+  if changed==nil then
+    if self.adapter.reportCommandError then self.adapter:reportCommandError(changeErr) end
+    return nil,changeErr
+  end
+  return not changed.off
+end
 function Main:start()
   if self.started then return true end
   self.input_alignment_suspended=false
@@ -1215,6 +1254,7 @@ function Main:start()
   if self.view.setHelpCloseCallback then self.view:setHelpCloseCallback(function() return true end) end
   if self.view.setFeedbackCallback then self.view:setFeedbackCallback(function(payload,done) return self.adapter:submitFeedback(payload,done) end) end
   if self.view.setOptionsActionCallback then self.view:setOptionsActionCallback(function(action,key,wanted)
+    if action=="starter_ui" then return self:toggleStarterUI() end
     if action=="send_debug" then return self.failure_reports:submitReport(nil,function(result,sendErr) local message=sendErr and ("Could not send report: "..tostring(sendErr)) or ("Report sent anonymously. Reference: "..tostring(result.report_id or result.number or "received")); if self.view.setSupportStatus then self.view:setSupportStatus(message) end; self:reportMapTransfer(message,sendErr~=nil) end) end
     if action=="map_settings" then local config={}; for key,value in pairs(self.settings.mapper or {}) do config[key]=value end; local current=self.automapper and self.automapper:currentRoom(); local scope=current and self.map:currentTransferScope(current); if scope then config.current_area_name=scope.area_name; config.current_subarea_name=scope.subarea_name end; return config end
     if action=="refresh_data" then return self:refreshCharacterData() end
@@ -1243,6 +1283,7 @@ function Main:start()
     local command=({roller_start="start",roller_stop="stop",roller_status="status",roller_show="show",roller_stats="stats",roller_last="last",roller_reset="reset",roller_help="help"})[action]
     if not command then return nil,"unknown autoroller action" end; return self.roller:command(command)
   end) end
+  if self.view.setStarterUIStatusCallback then self.view:setStarterUIStatusCallback(function() return self:starterUIState() end) end
   if self.view.setChatAllSources then self.view:setChatAllSources(self.settings.chat and self.settings.chat.all_sources or {}) end
   if self.view.setChatSounds then self.view:setChatSounds(self.settings.chat and self.settings.chat.sounds) end
   if self.view.setChatVisible then self.view:setChatVisible(not (self.settings.chat and self.settings.chat.visible==false)) end
@@ -1330,6 +1371,7 @@ function Main:start()
     end
   end) end
   if self.view.setCopyTextCallback then self.view:setCopyTextCallback(function(text) return self.adapter:copyText(text) end) end
+  self:defaultStarterUI()
   self:applyResponsiveLayout()
   self.collector=Collector.new(self.adapter,Parser,function(snapshot,key,parsed)
     if key=="time" then self:onClockSync(snapshot.time); return end
@@ -1367,6 +1409,10 @@ function Main:start()
   end)
   self.runtime.events[#self.runtime.events+1]=self.adapter:addEvent(Events.mapper.disconnect,function() self.character_entry_started=false; self.character_entry_name=nil; if self.roller and self.roller.onDisconnect then self.roller:onDisconnect() end; self:callSpecialTransition("cancel","disconnect"); self.automapper:onDisconnect(); self.walker:stop("disconnected") end)
   self.runtime.events[#self.runtime.events+1]=self.adapter:addEvent("sysWindowResizeEvent",function() self:applyResponsiveLayout() end)
+  self.runtime.events[#self.runtime.events+1]=self.adapter:addEvent("sysLoadEvent",function() self:defaultStarterUI(); self:applyResponsiveLayout() end)
+  self.runtime.events[#self.runtime.events+1]=self.adapter:addEvent("sysInstallPackage",function(_,packageName)
+    if type(packageName)=="string" and packageName:lower()=="mudlet-base-ui" then self:defaultStarterUI(); self:applyResponsiveLayout() end
+  end)
   self.runtime.events[#self.runtime.events+1]=self.adapter:addEvent("sysUninstallPackage",function(_,packageName)
     if packageName~=(self.settings.package_name or "DragonsGateHUD") then return end
     self:restoreMainInputAlignment()

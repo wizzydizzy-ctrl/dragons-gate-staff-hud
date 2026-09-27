@@ -785,8 +785,9 @@ test("compatible view adoption keeps saved colors while discarding unsaved color
     view:setColorStyles({styles={room={foreground="#123456"}}}); view:applyLayout(require("layout").compute(420,280))
     view:showColorSettings(); view:selectColorStyle("room"); view.color_style_fields.foreground.input:print("#ABCDEF")
     view:setColorStyleCallback(function() error("retired callback") end)
+    view:setStarterUIStatusCallback(function() error("retired starter UI callback") end)
     local adopted=assert(adapter:adoptView(view,settings)); eq(adopted,view); eq(view.root,root); eq(root.deleted,nil)
-    eq(view.color_style_callback,nil); eq(view.color_style_draft,nil)
+    eq(view.color_style_callback,nil); eq(view.starter_ui_status_callback,nil); eq(view.color_style_draft,nil)
     for _,widget in ipairs(view:colorSettingsWidgets()) do eq(widget.visible,false) end
     view:showColorSettings(); view:selectColorStyle("room"); eq(view.color_style_fields.foreground.input.text,"#123456")
     view:delete()
@@ -845,7 +846,7 @@ test("color options menu exposes current and future feature toggles",function()
   view:setColorOptions({enabled=true,notice=true,room=true,exits=false,currency=true,races=true,classes=true,portal=true,attack=true,damage=true,danger=true,recovery=true,upkeep=true,spell=true,discovery=true,illumination=true})
   view:applyLayout(require("layout").compute(1200,800)); view.color_toggle.click()
   eq(view.color_menu_visible,true); eq(view.color_menu.visible,true); eq(view.color_menu_scrim.visible,true)
-  eq(#view.option_action_order,12); view:setAutoUpdateEnabled(false); eq(view.option_action_buttons.auto_update.option_text,"AUTOMATIC UPDATES: OFF"); view:setAutoUpdateEnabled(true); eq(view.option_action_buttons.auto_update.option_text,"AUTOMATIC UPDATES: ON"); eq(view:setDisplayTextSize("small"),"small"); eq(view.option_action_buttons.text_size.option_text,"HUD TEXT: SMALL"); eq(view:setMainConsoleAutoWrap(false),false); eq(view.option_action_buttons.auto_main_wrap.option_text,"AUTO MAIN WRAP: OFF"); eq(view:setMainConsoleAutoWrap(true),true); eq(view.option_action_buttons.auto_main_wrap.option_text,"AUTO MAIN WRAP: ON"); view.option_action_buttons.color_settings.click(); eq(view.color_settings_visible,true)
+  eq(#view.option_action_order,13); view:setAutoUpdateEnabled(false); eq(view.option_action_buttons.auto_update.option_text,"AUTOMATIC UPDATES: OFF"); view:setAutoUpdateEnabled(true); eq(view.option_action_buttons.auto_update.option_text,"AUTOMATIC UPDATES: ON"); eq(view:setDisplayTextSize("small"),"small"); eq(view.option_action_buttons.text_size.option_text,"HUD TEXT: SMALL"); eq(view:setMainConsoleAutoWrap(false),false); eq(view.option_action_buttons.auto_main_wrap.option_text,"AUTO MAIN WRAP: OFF"); eq(view:setMainConsoleAutoWrap(true),true); eq(view.option_action_buttons.auto_main_wrap.option_text,"AUTO MAIN WRAP: ON"); view.option_action_buttons.color_settings.click(); eq(view.color_settings_visible,true)
   for _,key in ipairs(view.color_option_order) do eq(view.color_option_buttons[key].visible,true) end
   eq(view.color_option_buttons.room.message:find("ROOM TITLES",1,true)~=nil,true)
   eq(view.color_option_buttons.exits.message:find("OFF",1,true)~=nil,true)
@@ -862,11 +863,29 @@ test("main input alignment defaults off immediately after automatic main wrap",f
   local view=chatView(); local button=view.option_action_buttons.align_main_input
   eq(view.main_input_aligned,false); eq(button.option_text,"ALIGN INPUT: OFF")
   eq(button.tooltip,"Align input with main display (left edge only). Input ends before Mudlet's native Search/status controls, which stay visible on the right. Your normal input, draft, history, and aliases remain available. OFF restores the previous input style and compact-input preference."); eq(button.parent,view.options_scroll)
-  eq(table.concat(view.option_action_order,","),"command_help,refresh_data,auto_update,text_size,auto_main_wrap,align_main_input,chat_settings,keybindings_settings,color_settings,map_settings,roller_settings,support")
+  eq(table.concat(view.option_action_order,","),"command_help,refresh_data,auto_update,text_size,auto_main_wrap,align_main_input,starter_ui,chat_settings,keybindings_settings,color_settings,map_settings,roller_settings,support")
   view:applyLayout(require("layout").compute(1200,800)); view.color_toggle.click()
   eq(button.visible,true); assert(button.message:find("ALIGN INPUT: OFF",1,true))
   local wrap=view.option_action_buttons.auto_main_wrap
   eq(button.y,wrap.y+wrap.height)
+end)
+
+test("Mudlet starter UI Options label refreshes from the package state",function()
+  local view=chatView(); local button=view.option_action_buttons.starter_ui
+  eq(button.option_text,"MUDLET STARTER UI: UNAVAILABLE")
+  eq(view:setStarterUIState(true,true),true); eq(button.option_text,"MUDLET STARTER UI: OFF")
+  eq(view:setStarterUIState(false,true),false); eq(button.option_text,"MUDLET STARTER UI: ON")
+  view:setStarterUIState(nil,false); eq(button.option_text,"MUDLET STARTER UI: UNAVAILABLE")
+  local hidden=false
+  view:setStarterUIStatusCallback(function() view:setStarterUIState(hidden,true) end)
+  view:setOptionsActionCallback(function(action)
+    eq(action,"starter_ui"); hidden=not hidden; view:setStarterUIState(hidden,true); return not hidden
+  end)
+  view:applyLayout(require("layout").compute(1200,800)); view.color_toggle.click()
+  eq(button.option_text,"MUDLET STARTER UI: ON"); assert(button.message:find("MUDLET STARTER UI: ON",1,true))
+  eq(button.click(),false); eq(button.option_text,"MUDLET STARTER UI: OFF")
+  view.color_toggle.click(); assert(button.message:find("MUDLET STARTER UI: OFF",1,true))
+  eq(button.click(),true); eq(button.option_text,"MUDLET STARTER UI: ON")
 end)
 
 test("main input alignment setter refreshes hidden and open menus independently of wrap",function()

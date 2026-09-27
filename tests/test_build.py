@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 EXPECTED_EDITION='staff'
 EXPECTED_REPOSITORY='dragons-gate-staff-hud'
+EXPECTED_VERSION='0.3.72'
 class BuildTest(unittest.TestCase):
     def run_lua(self, source, cwd):
         completed=subprocess.run(['lua','-'],input=source,text=True,cwd=cwd,capture_output=True)
@@ -14,12 +15,14 @@ class BuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             defaults=(ROOT/'src/defaults.lua').read_text()
             self.assertEqual(re.search(r'edition\s*=\s*"([^"]+)"',defaults).group(1),EXPECTED_EDITION)
+            self.assertEqual(re.search(r'version\s*=\s*"([^"]+)"',defaults).group(1),EXPECTED_VERSION)
             owner=re.search(r'github\s*=\s*\{\s*owner="([^"]+)"',defaults).group(1)
             repository=re.search(r'github\s*=\s*\{[^}]*repository="([^"]+)"',defaults).group(1)
             self.assertEqual(repository,EXPECTED_REPOSITORY)
             subprocess.run([sys.executable,str(ROOT/'scripts/build.py'),'--output',td,'--owner',owner,'--repository',repository],check=True)
             self.assertEqual({path.name for path in Path(td).iterdir()},{'DragonsGateHUD.mpackage','DGHUDRecovery.mpackage','DGHUDMigration.mpackage','manifest.json'})
             package=Path(td)/'DragonsGateHUD.mpackage'; manifest=json.loads((Path(td)/'manifest.json').read_text())
+            self.assertEqual(manifest['version'],EXPECTED_VERSION)
             recovery=Path(td)/'DGHUDRecovery.mpackage'; self.assertTrue(recovery.exists())
             migration=Path(td)/'DGHUDMigration.mpackage'; self.assertTrue(migration.exists())
             with zipfile.ZipFile(recovery) as z:
