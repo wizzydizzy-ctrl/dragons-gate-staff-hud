@@ -126,6 +126,39 @@ test("one owned line trigger captures and persists recognized chat",function()
   eq(controller:entries()[1].category,"ESP"); eq(f.storageAppends,1); eq(f:count(f.triggers),1)
 end)
 
+test("training readiness flows through the owned trigger into ALL only and survives storage reload",function()
+  local f=fake(); local stored={}; local append=f.storage.append
+  function f.storage:append(entry)
+    local ok,err=append(self,entry)
+    if ok then stored[#stored+1]=entry end
+    return ok,err
+  end
+  local sources=require("defaults").chat.all_sources
+  eq(sources.COMBAT,false)
+  local controller=makeController(f,nil,nil,sources); assert(controller:start())
+  local line="You now feel prepared to train further in Two Handed Weapons."
+  f:line("\27[32m"..line.."\27[0m")
+  local entries=controller:entries()
+  eq(#entries,1); eq(entries[1].category,"ALL"); eq(entries[1].source,"builtin")
+  eq(entries[1].message,line); eq(entries[1].line,line)
+  eq(f.storageAppends,1); eq(#stored,1); eq(stored[1],entries[1])
+  eq(stored[1].character,f.character); eq(stored[1].timestamp,f.timestampValue)
+  eq(#controller.history:categories(),1); eq(controller.history:categories()[1],"ALL")
+  for _,filter in ipairs({"ROOM","OWN","PRIVATE","WHISPER","ESP","DRAGON","SECIAN","CONTACT","STAFF","COMBAT"}) do
+    assert(controller:setFilter(filter)); eq(#controller:entries(),0)
+  end
+  assert(controller:setFilter("ALL")); eq(#controller:entries(),1)
+  f:line(line); eq(f.storageAppends,1); eq(#stored,1)
+  assert(controller:shutdown())
+
+  local reloaded=fake(stored); local restored=makeController(reloaded,nil,nil,sources)
+  assert(restored:start()); local recovered=restored:entries()
+  eq(#recovered,1); eq(recovered[1].category,"ALL"); eq(recovered[1].source,"builtin")
+  eq(recovered[1].message,line); eq(recovered[1].line,line)
+  eq(reloaded.loadRecentCalls,1); eq(reloaded.storageAppends,0)
+  assert(restored:shutdown())
+end)
+
 test("direct thoughts flow through the owned trigger into contact and private filters",function()
   local f=fake(); local controller=makeController(f); assert(controller:start()); assert(controller:setFilter("CONTACT"))
   f:line('Seaux thinks to you, "Hello"')

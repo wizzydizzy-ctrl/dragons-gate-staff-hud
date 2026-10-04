@@ -174,6 +174,50 @@ test("normalizes ANSI before parsing",function()
   eq(e.speaker,"Tekk"); eq(e.line,'Tekk (ESP): "ahhh and she returns"')
 end)
 
+test("captures training readiness for any nonempty skill in ALL with the full message",function()
+  for _,skill in ipairs({"Dodge.","Two Handed Weapons.","Rune Magic","Dragon's Lore","Unlisted Skill 42"}) do
+    local line="You now feel prepared to train further in "..skill
+    local e=assert(Parser.parse(line,"Dace Alterac","2026-08-31T13:00:00-04:00"))
+    eq(e.category,"ALL"); eq(e.message,line); eq(e.line,line); eq(e.source,"builtin")
+    eq(e.schema,1); eq(e.character,"Dace Alterac"); eq(e.timestamp,"2026-08-31T13:00:00-04:00")
+    eq(e.speaker,nil); eq(e.target,nil); eq(e.language,nil)
+  end
+end)
+
+test("accepts whitespace before training skills while preserving the full message",function()
+  for _,separator in ipairs({"   ","\t"," \t "}) do
+    local line="You now feel prepared to train further in"..separator.."Rune Magic."
+    local e=assert(Parser.parse(line))
+    eq(e.category,"ALL"); eq(e.message,line); eq(e.line,line)
+  end
+end)
+
+test("normalizes ANSI in training readiness prefixes and multiword skills",function()
+  local line="You now feel prepared to train further in Two Handed Weapons."
+  local e=assert(Parser.parse("\27[32mYou now feel prepared\27[0m to train further in \27[36mTwo Handed Weapons.\27[0m"))
+  eq(e.category,"ALL"); eq(e.message,line); eq(e.line,line)
+end)
+
+test("rejects training readiness without a skill",function()
+  for _,suffix in ipairs({""," ","   ","\t"," \27[32m\27[0m"}) do
+    eq(Parser.parse("You now feel prepared to train further in"..suffix),nil)
+  end
+end)
+
+test("training readiness rejects quoted and other narration while preserving room speech",function()
+  local line="You now feel prepared to train further in Rune Magic."
+  for _,narration in ipairs({
+    '"'..line..'"',
+    "The trainer tells you: "..line,
+    "Earlier, "..line,
+    "You feel prepared to train further in Rune Magic.",
+    "You now feel prepared to train further into Rune Magic.",
+    "You now feel prepared to train further in",
+  }) do eq(Parser.parse(narration),nil) end
+  local spoken=assert(Parser.parse('Aerin says, "'..line..'"'))
+  eq(spoken.category,"ROOM"); eq(spoken.speaker,"Aerin"); eq(spoken.message,line)
+end)
+
 test("captures only conservatively recognized combat lines",function()
   local damage=assert(Parser.parse("Your head takes 8 points of impact damage!","Dace Alterac"))
   eq(damage.category,"COMBAT"); eq(damage.message,"Your head takes 8 points of impact damage!"); eq(damage.source,"builtin")
