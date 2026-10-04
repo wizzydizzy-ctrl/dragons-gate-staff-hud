@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 EXPECTED_EDITION='staff'
 EXPECTED_REPOSITORY='dragons-gate-staff-hud'
-EXPECTED_VERSION='0.3.82'
+EXPECTED_VERSION='0.3.83'
 class BuildTest(unittest.TestCase):
     def run_lua(self, source, cwd):
         completed=subprocess.run(['lua','-'],input=source,text=True,cwd=cwd,capture_output=True)
