@@ -430,10 +430,14 @@ function View.new(settings)
     local key,text=option[1],option[2]; local button=label("DGHUD.ColorSettings."..key,self.color_settings_content)
     button:setClickCallback(function() return self:selectColorOption(key) end); button.option_text=text; self.color_option_buttons[key]=button
   end
-  self.option_action_order={"command_help","refresh_data","auto_update","text_size","auto_main_wrap","align_main_input","starter_ui","chat_settings","keybindings_settings","color_settings","map_settings","roller_settings","support"}
+  self.option_action_order={"command_help","refresh_data","auto_update","text_size","auto_main_wrap","align_main_input","main_skills","starter_ui","chat_settings","keybindings_settings","color_settings","map_settings","roller_settings","support"}
   local actionLabels={command_help="HELP & COMMANDS…",refresh_data="REFRESH CHARACTER DATA",auto_update="AUTOMATIC UPDATES: OFF",text_size="HUD TEXT: NORMAL",auto_main_wrap="AUTO MAIN WRAP: ON",align_main_input="ALIGN INPUT: OFF",starter_ui="MUDLET STARTER UI: UNAVAILABLE",chat_settings="CHAT SETTINGS…",keybindings_settings="KEYBINDINGS…",color_settings="COLOR SETTINGS…",map_settings="MAP SETTINGS…",roller_settings="AUTOROLLER…",support="SUPPORT…"}
+  actionLabels.main_skills="MAIN SKILLS: ON"
   self.option_action_buttons={}
   for _,key in ipairs(self.option_action_order) do local button=label("DGHUD.Header.Options."..key,self.options_scroll); button.option_text=actionLabels[key]; button:setClickCallback(function() return self:selectOptionsAction(key) end); self.option_action_buttons[key]=button end
+  self:setMainSkillsEnabled(not (self.settings.display and self.settings.display.main_skills==false))
+  local skillsButton=self.option_action_buttons.main_skills
+  if skillsButton.setToolTip then pcall(skillsButton.setToolTip,skillsButton,"Format possessed skills in the main display with game skill numbers, level and remaining uses. The right-side skills list stays unchanged.") end
   local starterUIButton=self.option_action_buttons.starter_ui
   if starterUIButton.setToolTip then pcall(starterUIButton.setToolTip,starterUIButton,"Show or hide Mudlet's separate starter panel. Game text, the command line, and DGHUD remain visible. When shown, the panel may overlap HUD cards; drag its title bar to move it.") end
   local alignInputButton=self.option_action_buttons.align_main_input
@@ -2394,6 +2398,13 @@ function View:setMainConsoleAutoWrap(enabled)
   if button then button.option_text="AUTO MAIN WRAP: "..(self.main_console_auto_wrap and "ON" or "OFF") end
   if self.color_menu_visible then self:renderColorOptions() end
   return self.main_console_auto_wrap
+end
+function View:setMainSkillsEnabled(enabled)
+  self.main_skills_enabled=enabled~=false
+  local button=self.option_action_buttons and self.option_action_buttons.main_skills
+  if button then button.option_text="MAIN SKILLS: "..(self.main_skills_enabled and "ON" or "OFF") end
+  if self.color_menu_visible then self:renderColorOptions() end
+  return self.main_skills_enabled
 end
 function View:setMainInputAligned(enabled)
   self.main_input_aligned=enabled==true
