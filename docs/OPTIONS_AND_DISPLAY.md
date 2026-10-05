@@ -10,9 +10,15 @@ On a fresh profile, the Staff HUD turns the starter dock off. If you turn it on,
 
 The starter dock may cover part of the HUD when shown. Drag its title bar to move it.
 
-## Main skills output
+## Skill Settings
 
-**OPTIONS → MAIN SKILLS** is on by default. Complete `skill` responses use aligned **Number / Skill / LVL / USES** columns, sorted by highest level and then fewest uses remaining. The number is the fixed game skill ID, not a row number. Every possessed skill is included.
+Open **OPTIONS → Skill Settings** to control skill formatting and sorting. **MAIN SKILLS** stays on by default and formats complete `skill` responses in aligned **Number / Skill / LVL / USES** columns. Turn it off to keep future responses in the game's original layout.
+
+**Main Display** and **Right Sidebar** have independent sorting choices. For each, choose a primary key: **Level**, **Uses**, **Name**, **Number**, **Ready to train (0 uses)**, or **Category (combat vs utility)**. Choose ascending or descending order, and optionally add a secondary key with its own direction. Both displays default to **Level descending**, then **Uses ascending**. For “level then uses,” choose **Level** as the primary key and **Uses** as the secondary key.
+
+Changing **Right Sidebar** ordering immediately reorders its existing skill rows. **Main Display** ordering applies to the next complete `skill` output; previously printed tables stay as they are. Formatting and sorting choices are saved for the whole Mudlet profile and survive character changes, reloads, restarts, and HUD updates.
+
+**Number** is the game's fixed catalog ID used for training, not a display rank. All captured skills remain visible; Category and Ready to train sorting only change their order.
 
 ```text
 Number  Skill    LVL  USES
@@ -24,4 +30,4 @@ Tables ending in blank lines update on the next UI tick, without waiting for ano
 
 Rows with **0 uses remaining are green**, combat skills are **blue**, and utility skills are **yellow**. Zero uses takes priority. Customize the three styles under **OPTIONS → COLOR SETTINGS → TEXT STYLES → Skills**. The **SKILL ROW COLORS** category turns coloring on or off without disabling the aligned layout.
 
-Turn **MAIN SKILLS** off to leave future responses in the game's original layout. Both formatting and color choices are saved with the profile and survive updates and restarts. No training commands are sent, and unrelated output is left alone.
+Color choices are also saved with the profile. No training commands are sent, and unrelated output is left alone.
