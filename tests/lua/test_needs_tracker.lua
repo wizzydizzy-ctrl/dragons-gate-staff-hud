@@ -3,6 +3,88 @@ local function eq(a,b) assert(a==b,tostring(a).." ~= "..tostring(b)) end
 
 local Parser=require("command_parser")
 local biography=[[You are Dace Alterac, a delicate boned and skinny bodied 28 year old Entropic Male young Monitanian. You are 7'0" and weigh 247 lbs.]]
+local recoveryNotices={
+  {"You're no longer ravenous, only hungry now!","hunger","hungry",{"You're no longer","ravenous, only hungry now!"}},
+  {"You're no longer hungry.","hunger","ok",{"You're no longer","hungry."}},
+  {"You're full, time to stop eating for a while.","hunger","full",{"You're full, time to stop eating","for a while."}},
+  {"You're no longer parched, only thirsty now!","thirst","thirsty",{"You're no longer parched,","only thirsty now!"}},
+  {"You're no longer thirsty.","thirst","quenched",{"You're no longer","thirsty."}},
+  {"You're sloshing, you've been drinking so much. Time to stop drinking for a while.","thirst","sloshing",
+    {"You're sloshing, you've been drinking","so much. Time to stop drinking for a while."}},
+}
+local function decorateRecoveryNotice(text,variant)
+  if variant==2 then return "\7"..text.."\7" end
+  if variant==3 then return " \t\27[32m"..text.."\27[0m " end
+  if variant==4 then return "> "..text end
+  if variant==5 then return "\7\27[33m[199] 147/147 hp, 60/60 ftg > "..text.."\27[0m\7" end
+  return text
+end
+
+test("exact food and water recovery notices preserve the other need through BEL ANSI and prompts",function()
+  for variant=1,5 do for _,notice in ipairs(recoveryNotices) do
+    local stamp=10; local changes=0
+    local n=Needs.new({epoch=function() return stamp end},function() changes=changes+1 end)
+    assert(n:onLine("You are ravenous. You are parched.","info")); local before=n:status()
+    stamp=11; assert(n:onLine(decorateRecoveryNotice(notice[1],variant)),notice[1])
+    local after=n:status(); local changed=notice[2]; local other=changed=="hunger" and "thirst" or "hunger"
+    eq(after[changed].status,notice[3]); eq(after[changed].timestamp,11); eq(after[changed].source,"output")
+    assert(after[changed].raw:find(notice[1],1,true)); eq(after[changed].raw:find("\7",1,true),nil)
+    eq(after[changed].raw:find("\27",1,true),nil)
+    for _,field in ipairs({"status","timestamp","source","raw"}) do eq(after[other][field],before[other][field]) end
+    stamp=12
+    for _,chatter in ipairs({"You eat the last of your bread.","You drink the last of your water.",
+      "You burp","You burp.","Hmmm... not bad","Hmmm... not bad.","Ahh... That hit the spot","Ahh... That hit the spot.",">"}) do
+      eq(n:onLine(decorateRecoveryNotice(chatter,variant)),false)
+      local unchanged=n:status()
+      for _,need in ipairs({"hunger","thirst"}) do
+        for _,field in ipairs({"status","timestamp","source","raw"}) do eq(unchanged[need][field],after[need][field]) end
+      end
+    end
+    eq(changes,2)
+  end end
+end)
+
+test("combined recovery notices update both needs in either sentence order",function()
+  for variant=1,5 do for index=1,3 do for _,reverse in ipairs({false,true}) do
+    local hunger,thirst=recoveryNotices[index],recoveryNotices[index+3]
+    local n=Needs.new({epoch=function() return 42 end}); n:onLine("You are ravenous. You are parched.")
+    local text=reverse and thirst[1].." "..hunger[1] or hunger[1].." "..thirst[1]
+    assert(n:onLine(decorateRecoveryNotice("You eat some bread. "..text,variant)))
+    local state=n:status(); eq(state.hunger.status,hunger[3]); eq(state.thirst.status,thirst[3])
+    eq(state.hunger.timestamp,42); eq(state.thirst.timestamp,42)
+    eq(state.hunger.source,"output"); eq(state.thirst.source,"output")
+  end end end
+end)
+
+test("wrapped recovery INFO preserves explicit needs and defaults only the omitted side",function()
+  local cases={}
+  for _,notice in ipairs(recoveryNotices) do
+    cases[#cases+1]={chunks=notice[4],hunger=notice[2]=="hunger" and notice[3] or "ok",
+      thirst=notice[2]=="thirst" and notice[3] or "ok"}
+  end
+  for index=1,3 do
+    local chunks={}
+    for _,notice in ipairs({recoveryNotices[index],recoveryNotices[index+3]}) do
+      for _,chunk in ipairs(notice[4]) do chunks[#chunks+1]=chunk end
+    end
+    cases[#cases+1]={chunks=chunks,hunger=recoveryNotices[index][3],thirst=recoveryNotices[index+3][3]}
+  end
+  for _,case in ipairs(cases) do
+    local lines={"\27[32m[199] 147/147 hp, 60/60 ftg > "..biography.."\27[0m"}
+    for _,chunk in ipairs(case.chunks) do lines[#lines+1]="\7\27[33m"..chunk.."\27[0m\7" end
+    lines[#lines+1]=">"
+    local parsed=assert(Parser.parseInfo(lines)); eq(parsed.character.full_name,"Dace Alterac")
+    for _,observed in ipairs({false,true}) do
+      local n=Needs.new({epoch=function() return 42 end}); n:onLine("You are ravenous. You are parched.")
+      if observed then for _,line in ipairs(lines) do n:onLine(line) end
+      else assert(n:onInfo(parsed)) end
+      local state=n:status(); eq(state.hunger.status,case.hunger); eq(state.thirst.status,case.thirst)
+      for _,need in ipairs({"hunger","thirst"}) do
+        eq(state[need].source,observed and "output" or "info"); eq(state[need].timestamp,42)
+      end
+    end
+  end
+end)
 
 test("dehydrated standalone ANSI and wrapped INFO notices retain a water warning",function()
   local n=Needs.new({epoch=function() return 42 end})

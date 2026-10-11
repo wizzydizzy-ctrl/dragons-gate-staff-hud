@@ -1396,6 +1396,110 @@ test("unsolicited prompt-prefixed wrapped ANSI INFO resets rendered needs withou
   end
   assert(hud:shutdown())
 end)
+local runtimeRecoveryNotices={
+  {"You're no longer ravenous, only hungry now!","hunger","hungry",{"You're no longer","ravenous, only hungry now!"}},
+  {"You're no longer hungry.","hunger","ok",{"You're no longer","hungry."}},
+  {"You're full, time to stop eating for a while.","hunger","full",{"You're full, time to stop eating","for a while."}},
+  {"You're no longer parched, only thirsty now!","thirst","thirsty",{"You're no longer parched,","only thirsty now!"}},
+  {"You're no longer thirsty.","thirst","quenched",{"You're no longer","thirsty."}},
+  {"You're sloshing, you've been drinking so much. Time to stop drinking for a while.","thirst","sloshing",
+    {"You're sloshing, you've been drinking","so much. Time to stop drinking for a while."}},
+}
+local function recoveryRuntime()
+  local f=fake(); f.gmcp={Char={Status={},Vitals={}}}
+  local createView=f.createView
+  function f:createView(settings)
+    local view=createView(self,settings); local update=view.update
+    -- Capture the same last_state handoff as the real View:update method.
+    function view:update(state) self.last_state=state; return update(self,state) end
+    return view
+  end
+  local hud=Main.new(f,{edition="staff",layout={},chat={enabled=false},mapper={enabled=false}})
+  assert(hud:start())
+  return f,hud,assert(f.triggers[hud.collector.runtime.triggers[1]]),
+    assert(f.triggers[hud.runtime.triggers[#hud.runtime.triggers]])
+end
+local function assertRecoveryRuntimeState(hud,hunger,thirst)
+  eq(hud.view.last_state,hud.last_state)
+  for _,state in ipairs({hud.needs:status(),hud.last_state.needs,hud.view.last_state.needs,hud.view.state.needs}) do
+    eq(state.hunger.status,hunger); eq(state.thirst.status,thirst)
+  end
+end
+test("registered recovery output reaches runtime and view last state without chatter resets or sends",function()
+  for _,prefix in ipairs({"","> ","[199] 147/147 hp, 60/60 ftg > "}) do
+    local f,hud,_,raw=recoveryRuntime()
+    local function deliver(text) raw("\7\27[32m"..prefix..text.."\27[0m\7") end
+    deliver("You are ravenous. You are parched.")
+    local hunger,thirst="ravenous","parched"
+    for index,notice in ipairs(runtimeRecoveryNotices) do
+      local before=hud.last_state.needs; f.epochValue=100+index
+      deliver(notice[1])
+      if notice[2]=="hunger" then hunger=notice[3] else thirst=notice[3] end
+      assertRecoveryRuntimeState(hud,hunger,thirst)
+      local other=notice[2]=="hunger" and "thirst" or "hunger"
+      for _,state in ipairs({hud.last_state.needs,hud.view.last_state.needs}) do
+        eq(state[notice[2]].timestamp,100+index); eq(state[notice[2]].source,"output")
+        for _,field in ipairs({"status","timestamp","source","raw"}) do eq(state[other][field],before[other][field]) end
+      end
+      before=hud.last_state.needs
+      for _,chatter in ipairs({"You eat the last of your bread.","You drink the last of your water.",
+        "You burp","You burp.","Hmmm... not bad","Ahh... That hit the spot",">"}) do
+        deliver(chatter); assertRecoveryRuntimeState(hud,hunger,thirst)
+        for _,need in ipairs({"hunger","thirst"}) do
+          for _,field in ipairs({"status","timestamp","source","raw"}) do eq(hud.last_state.needs[need][field],before[need][field]) end
+        end
+      end
+    end
+    for index=1,3 do
+      deliver(runtimeRecoveryNotices[index][1].." "..runtimeRecoveryNotices[index+3][1])
+      assertRecoveryRuntimeState(hud,runtimeRecoveryNotices[index][3],runtimeRecoveryNotices[index+3][3])
+    end
+    eq(#(f.sentCommands or {}),0); assert(hud:shutdown())
+  end
+end)
+test("wrapped recovery INFO reaches runtime and view last state in both callback orders",function()
+  local cases={}
+  for _,notice in ipairs(runtimeRecoveryNotices) do
+    cases[#cases+1]={chunks=notice[4],hunger=notice[2]=="hunger" and notice[3] or "ok",
+      thirst=notice[2]=="thirst" and notice[3] or "ok"}
+  end
+  for index=1,3 do
+    local chunks={}
+    for _,notice in ipairs({runtimeRecoveryNotices[index],runtimeRecoveryNotices[index+3]}) do
+      for _,chunk in ipairs(notice[4]) do chunks[#chunks+1]=chunk end
+    end
+    cases[#cases+1]={chunks=chunks,hunger=runtimeRecoveryNotices[index][3],thirst=runtimeRecoveryNotices[index+3][3]}
+  end
+  for _,tracked in ipairs({false,true}) do for _,collectorFirst in ipairs({false,true}) do
+    for _,case in ipairs(cases) do
+      local f,hud,collector,raw=recoveryRuntime()
+      local function deliver(line)
+        if collectorFirst then collector(line); raw(line) else raw(line); collector(line) end
+      end
+      raw("You are ravenous. You are parched."); f.epochValue=101
+      if tracked then hud.collector:onOutgoing("info") end
+      deliver("\27[32m[199] 147/147 hp, 60/60 ftg > You are Dace Alterac, a delicate boned and skinny bodied 28 year old Entropic Male young Monitanian.\27[0m")
+      deliver([[You are 7'0" and weigh 247 lbs.]])
+      for _,chunk in ipairs(case.chunks) do deliver("\7\27[33m"..chunk.."\27[0m\7") end
+      deliver("[199] 147/147 hp, 60/60 ftg >")
+      eq(hud.collector.active,nil); assertRecoveryRuntimeState(hud,case.hunger,case.thirst)
+      for _,state in ipairs({hud.last_state.needs,hud.view.last_state.needs}) do
+        for _,need in ipairs({"hunger","thirst"}) do
+          eq(state[need].timestamp,101); eq(state[need].source,tracked and "info" or "output")
+        end
+      end
+      local before=hud.last_state.needs
+      for _,chatter in ipairs({"You eat some bread.","You drink some water.","You burp.",
+        "Hmmm... not bad","Ahh... That hit the spot",">"}) do
+        deliver(chatter); assertRecoveryRuntimeState(hud,case.hunger,case.thirst)
+        for _,need in ipairs({"hunger","thirst"}) do
+          for _,field in ipairs({"status","timestamp","source","raw"}) do eq(hud.last_state.needs[need][field],before[need][field]) end
+        end
+      end
+      eq(#(f.sentCommands or {}),0); assert(hud:shutdown())
+    end
+  end end
+end)
 test("supplied healthy INFO reaches runtime and rendered state through the collector",function()
   local biography=[[You are Dace Alterac, a delicate boned and skinny bodied 28 year old Entropic Male young Monitanian.  You are 7'0" and weigh 247 lbs.  You are satiated.]]
   for _,lines in ipairs({
