@@ -765,6 +765,358 @@ local function syntheticAdapter(entries)
   return f
 end
 
+local function referralAdapter(entries)
+  local f=syntheticAdapter(entries)
+  f.outboundCalls=0; f.gagCalls=0; f.delays={}
+  function f:send() self.outboundCalls=self.outboundCalls+1 end
+  function f:sendCommand() self.outboundCalls=self.outboundCalls+1 end
+  function f:gag() self.gagCalls=self.gagCalls+1 end
+  function f:deleteLine() self.gagCalls=self.gagCalls+1 end
+  local schedule=f.schedule
+  function f:schedule(delay,fn) self.delays[#self.delays+1]=delay; return schedule(self,delay,fn) end
+  return f
+end
+
+test("complete STAFF referrals persist and alert immediately with framing removed and no trailing output",function()
+  local f=referralAdapter(); local accepted={}
+  local controller=makeController(f,nil,function(entry) accepted[#accepted+1]=entry end,allSources({STAFF=false}))
+  assert(controller:start())
+  local lines={
+    "1. Corin refers Aerin North (sample-user): 'An item is misflagged.' [2 days, 4 secs ago.]",
+    "<Nera O'Vale refers Tara O'Fen (sample_42.user-name): 'A sample label is missing.'>",
+    "[GM] Keeper North is handling Nera O'Vale's referral.  (3 more pending.)",
+  }
+  for index,line in ipairs(lines) do
+    f.epochValue=100+index*4
+    f:line(" \t\27[35m"..line.."\27[0m \r\n")
+    eq(f.storageAppends,index); eq(#accepted,index); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+    eq(#controller:entries(),0); eq(accepted[index].line,line); eq(accepted[index].staff_referral,nil)
+    f:line("Unrelated room description after completion."); f:line(">refer 1"); f:fireTimer()
+    eq(f.storageAppends,index); eq(#accepted,index); eq(accepted[index].line,line)
+    f:line(line); eq(f.storageAppends,index); eq(#accepted,index)
+  end
+  eq(accepted[1].speaker,"Corin"); eq(accepted[1].target,"Aerin North")
+  eq(accepted[2].speaker,"Nera O'Vale"); eq(accepted[2].target,"Tara O'Fen")
+  eq(accepted[3].speaker,"Keeper North"); eq(accepted[3].target,"Nera O'Vale")
+  eq(accepted[3].message,"is handling Nera O'Vale's referral (3 more pending).")
+  assert(controller:setFilter("STAFF")); sameEntries(controller:entries(),accepted)
+  sameEntries(f.appendedEntries,accepted); eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+end)
+
+test("complete multiline STAFF referral payloads flush immediately without normalizing stored body or age text",function()
+  for _,kind in ipairs({"list","detail"}) do
+    for _,newline in ipairs({"\n","\r\n"}) do
+      local f=referralAdapter(); local accepted={}
+      local controller=makeController(f,nil,function(entry) accepted[#accepted+1]=entry end,allSources({STAFF=false}))
+      assert(controller:start())
+      local body="The fixture's label is misflagged."..newline.."  Keep these two spaces and this\ttab."
+      local tail=kind=="list" and "'"..newline.."[2 days,"..newline.."\t4 secs ago.]" or "'"..newline..">"
+      local message="refers Tara O'Fen (sample_42.user-name): '"..body..tail
+      local line=(kind=="list" and "1. " or "<").."Nera O'Vale "..message
+      f:line("\27[35m"..line.."\27[0m")
+      eq(f.storageAppends,1); eq(#accepted,1); eq(#controller:entries(),0)
+      eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+      eq(accepted[1].message,message); eq(accepted[1].line,line); eq(accepted[1].staff_referral,nil)
+      eq(f.appendedEntries[1].message,message); eq(f.appendedEntries[1].line,line)
+      assert(controller:setFilter("STAFF")); sameEntries(controller:entries(),accepted)
+      f:line("Unrelated output after the complete multiline payload."); f:fireTimer(); f:line(line)
+      eq(f.storageAppends,1); eq(#accepted,1); eq(controller:entries()[1].message,message)
+      eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+    end
+  end
+end)
+
+test("wrapped STAFF referral bodies retain quoted delimiters and list-like prose until their real closing line",function()
+  for _,kind in ipairs({"list","detail"}) do
+    local f=referralAdapter(); local accepted={}
+    local controller=makeController(f,nil,function(entry) accepted[#accepted+1]=entry end)
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    local first=(kind=="list" and "7. " or "<").."Corin North refers Tara O'Fen (sample_42.user-name): 'The fixture's label"
+    local body={"contains '>' in the middle and mentions Corin refers.","2. This numbered sentence is still body text.","The sample item remains misflagged."}
+    f:line(first)
+    for _,line in ipairs(body) do
+      f:line("\27[36m"..line.."\27[0m"); eq(f.storageAppends,0); eq(#accepted,0); eq(f:count(f.timers),1)
+    end
+    local _,lateTimer=next(f.timers)
+    local last=kind=="list" and "' [2 days, 4 secs ago.]" or "'>"
+    f:line(last)
+    local entry=controller:entries()[1]; assert(entry)
+    eq(entry.line,first.." "..table.concat(body," ").." "..last)
+    eq(entry.message,"refers Tara O'Fen (sample_42.user-name): 'The fixture's label "..table.concat(body," ").." "..last)
+    eq(entry.speaker,"Corin North"); eq(entry.target,"Tara O'Fen"); eq(entry.staff_referral,nil)
+    eq(f.storageAppends,1); eq(#accepted,1); eq(next(f.timers),nil)
+    f:line("Unrelated output must stay outside the referral."); lateTimer(); f:fireTimer()
+    eq(f.storageAppends,1); eq(#accepted,1); eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+  end
+end)
+
+test("STAFF referral age-only bracket lines and multiline ages finish without becoming prompt boundaries",function()
+  for _,ageLines in ipairs({{"[2 days, 4 secs ago.]"},{"[2 days,","4 secs ago.]"},{"[2 days,","3 hours,","4 secs ago.]"}}) do
+    local f=referralAdapter(); local accepted=0
+    local controller=makeController(f,nil,function() accepted=accepted+1 end)
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    local first="1. Corin refers Aerin North (sample-user): 'An item is misflagged.'"
+    f:line(first); eq(f.storageAppends,0)
+    for index,line in ipairs(ageLines) do
+      f:line("\27[35m"..line.."\27[0m")
+      eq(f.storageAppends,index==#ageLines and 1 or 0); eq(accepted,index==#ageLines and 1 or 0)
+    end
+    local entry=controller:entries()[1]
+    eq(entry.line,first.." "..table.concat(ageLines," "))
+    eq(entry.message,"refers Aerin North (sample-user): 'An item is misflagged.' "..table.concat(ageLines," "))
+    eq(entry.staff_referral,nil); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+    f:line("Unrelated output after the age."); eq(f.storageAppends,1); assert(controller:shutdown())
+  end
+end)
+
+test("STAFF referral buffering stops at command echoes blank lines room titles and numeric prompts",function()
+  for _,boundary in ipairs({">",">refer 2","[Synthetic Test Room.]","[123/456] >"," \t "}) do
+    for _,kind in ipairs({"list","detail"}) do
+      local f=referralAdapter(); local accepted=0
+      local controller=makeController(f,nil,function() accepted=accepted+1 end)
+      assert(controller:start()); assert(controller:setFilter("STAFF"))
+      local first=(kind=="list" and "1. " or "<").."Corin refers Aerin North (sample-user): 'Unfinished fixture"
+      f:line(first); eq(f.storageAppends,0)
+      f:line("\27[35m"..boundary.."\27[0m")
+      eq(f.storageAppends,1); eq(accepted,1); eq(controller:entries()[1].line,first)
+      eq(controller:entries()[1].staff_referral,nil); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+      f:line("Unrelated output after the prompt."); eq(f.storageAppends,1)
+      eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+    end
+  end
+end)
+
+test("STAFF detail referrals append a standalone angle terminator after a closed body and flush immediately",function()
+  for _,bodyLines in ipairs({
+    {"<Nera O'Vale refers Tara O'Fen (sample_42): 'Synthetic fixture.'"},
+    {"<Nera O'Vale refers Tara O'Fen (sample_42): 'Synthetic fixture","continues here.'"},
+  }) do
+    local f=referralAdapter(); local accepted=0
+    local controller=makeController(f,nil,function() accepted=accepted+1 end,allSources({STAFF=false}))
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    for _,line in ipairs(bodyLines) do f:line(line); eq(f.storageAppends,0); eq(accepted,0) end
+    local _,lateTimer=next(f.timers)
+    f:line(" \t\27[35m>\27[0m ")
+    eq(f.storageAppends,1); eq(accepted,1); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+    local entry=controller:entries()[1]; eq(entry.line,table.concat(bodyLines," ").." >")
+    eq(entry.message,entry.line:match("^<Nera O'Vale (.+)$")); eq(entry.staff_referral,nil)
+    eq(entry.speaker,"Nera O'Vale"); eq(entry.target,"Tara O'Fen")
+    f:line("Unrelated output after the real terminator."); lateTimer(); f:fireTimer()
+    eq(f.storageAppends,1); eq(accepted,1); eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+  end
+end)
+
+test("successful saved history clear discards pending STAFF referrals and cancels every stale callback",function()
+  for _,first in ipairs({
+    "1. Corin refers Aerin North (sample-user): 'Pending synthetic fixture",
+    "<Corin refers Aerin North (sample-user): 'Pending synthetic fixture",
+    "[GM] Corin [sample-user] submits an idea: Pending synthetic fixture",
+  }) do
+    local f=referralAdapter(); f.storageRemoved=1; local accepted=0
+    local controller=makeController(f,nil,function() accepted=accepted+1 end)
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    f:line("[GM] Keeper: Synthetic saved fixture."); eq(f.storageAppends,1); eq(accepted,1)
+    f:line(first); local _,firstTimer=next(f.timers)
+    f:line("continued fixture body."); local _,latestTimer=next(f.timers)
+    eq(f:count(f.timers),1); eq(f.storageAppends,1)
+    local ok,removed=controller:clearSavedHistory(true)
+    eq(ok,true); eq(removed,1); eq(f.storageClears,1); eq(f.storageClearConfirmed,true)
+    eq(controller.pendingStaffMessage,nil); eq(controller.pendingStaffMessageLines,nil); eq(controller.staffMessageTimer,nil)
+    eq(next(f.timers),nil); eq(#controller.history:entries("ALL"),0); eq(#controller:entries(),0)
+    firstTimer(); latestTimer(); f:fireTimer(); f:line("Remaining deleted fixture body.'>")
+    eq(#controller:handoff().entries,0); eq(f.storageAppends,1); eq(accepted,1)
+    assert(controller:shutdown()); latestTimer(); eq(f.storageAppends,1); eq(accepted,1)
+  end
+end)
+
+test("failed or unconfirmed saved history clear preserves pending STAFF referral body timer and later completion",function()
+  for _,kind in ipairs({"list","detail"}) do
+    for _,mode in ipairs({"missing","false","string","failed"}) do
+      local f=referralAdapter(); local accepted=0
+      local controller=makeController(f,nil,function() accepted=accepted+1 end)
+      assert(controller:start()); assert(controller:setFilter("STAFF"))
+      local first=(kind=="list" and "1. " or "<").."Corin refers Aerin North (sample-user): 'Pending fixture"
+      f:line(first); f:line("continued fixture body.")
+      local pending=controller.pendingStaffMessage; local timerId,timer=next(f.timers)
+      local confirmation
+      if mode=="false" then confirmation=false elseif mode=="string" then confirmation="yes"
+      elseif mode=="failed" then confirmation=true; f.storageClearFailure=true end
+      local ok,err=controller:clearSavedHistory(confirmation)
+      eq(ok,nil); assert(type(err)=="string")
+      eq(f.storageClears,mode=="failed" and 1 or 0); eq(controller.pendingStaffMessage,pending)
+      eq(controller.pendingStaffMessageLines,2); eq(controller.staffMessageTimer,timerId)
+      eq(f.timers[timerId],timer); eq(f:count(f.timers),1); eq(f.storageAppends,0); eq(accepted,0)
+      eq(pending.line,first.." continued fixture body.")
+      local last=kind=="list" and "' [4 secs ago.]" or "'>"
+      f:line(last); eq(f.storageAppends,1); eq(accepted,1)
+      eq(controller:entries()[1].line,first.." continued fixture body. "..last)
+      eq(controller:entries()[1].staff_referral,nil); eq(next(f.timers),nil)
+      timer(); eq(f.storageAppends,1); eq(accepted,1); assert(controller:shutdown())
+    end
+  end
+end)
+
+test("stale canceled STAFF timers cannot flush a new pending referral or invalidate its own idle timer",function()
+  for _,cancel in ipairs({"completion","boundary","handoff","clear"}) do
+    local f=referralAdapter(); local accepted=0
+    local controller=makeController(f,nil,function() accepted=accepted+1 end)
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    f:line("<Corin refers Aerin North (sample-user): 'First pending fixture")
+    local _,firstTimer=next(f.timers)
+    f:line("continued first fixture."); local _,latestTimer=next(f.timers)
+    if cancel=="completion" then f:line("'>") elseif cancel=="boundary" then f:line(">refer 2")
+    elseif cancel=="handoff" then controller:handoff() else assert(controller:clearSavedHistory(true)) end
+    local stored=f.storageAppends; local alerts=accepted
+    local first="2. Nera O'Vale refers Tara O'Fen (sample_42): 'Second pending fixture"
+    f:line(first)
+    local pending=controller.pendingStaffMessage; local timerId,timer=next(f.timers)
+    assert(pending); assert(timerId); firstTimer(); latestTimer()
+    eq(f.storageAppends,stored); eq(accepted,alerts); eq(controller.pendingStaffMessage,pending)
+    eq(controller.staffMessageTimer,timerId); eq(f.timers[timerId],timer); eq(f:count(f.timers),1)
+    f:line("continued second fixture."); local activeId,activeTimer=next(f.timers)
+    timer(); eq(f.storageAppends,stored); eq(accepted,alerts); eq(controller.pendingStaffMessage,pending)
+    eq(controller.staffMessageTimer,activeId); eq(f.timers[activeId],activeTimer); eq(f:count(f.timers),1)
+    f:fireTimer(); eq(f.storageAppends,stored+1); eq(accepted,alerts+1)
+    local entry=controller:entries()[#controller:entries()]
+    eq(entry.line,first.." continued second fixture."); eq(entry.staff_referral,nil)
+    eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil); assert(controller:shutdown())
+  end
+end)
+
+test("new referrals handling assignments and other chat stay distinct from a pending referral",function()
+  for _,nextLine in ipairs({
+    "2. Nera O'Vale refers Tara O'Fen (sample_42): 'Second fixture.' [4 secs ago.]",
+    "<Nera O'Vale refers Tara O'Fen (sample_42): 'Second fixture.'>",
+    "[GM] Keeper is handling Corin's referral.  (0 more pending.)",
+    "[GM] Keeper: Separate staff message.",
+    'Lark says, "Separate room message."',
+    'Lark whispers to you, "Separate whisper."',
+    "** Lark North just arrived in the world.",
+  }) do
+    local f=referralAdapter(); local accepted={}
+    local controller=makeController(f,nil,function(entry) accepted[#accepted+1]=entry end)
+    assert(controller:start())
+    local first="1. Corin refers Aerin North (sample-user): 'Unfinished fixture"
+    f:line(first); f:line("continued fixture body."); f:line(nextLine)
+    eq(f.storageAppends,2); eq(#accepted,2); eq(accepted[1].line,first.." continued fixture body.")
+    eq(accepted[1].speaker,"Corin"); eq(accepted[1].target,"Aerin North"); eq(accepted[2].line,nextLine)
+    eq(accepted[1].staff_referral,nil); eq(accepted[2].staff_referral,nil); eq(controller.pendingStaffMessage,nil)
+    eq(next(f.timers),nil); assert(controller:shutdown())
+  end
+end)
+
+test("STAFF referral alerts respect sound switches independently of Show in ALL and never double-play",function()
+  local Sounds=require("chat_sounds")
+  for _,showStaff in ipairs({false,true}) do
+    for _,staffSound in ipairs({false,true}) do
+      local f=referralAdapter(); f.played={}
+      function f:playChatSound(sound,volume) self.played[#self.played+1]={sound=sound,volume=volume}; return true end
+      local config=Sounds.defaults(); config.volume=25; config.tabs.ALL.enabled=true; config.tabs.STAFF.enabled=staffSound
+      local sounds=assert(Sounds.new(f,config)); local accepted=0; local controller
+      controller=makeController(f,nil,function(entry) accepted=accepted+1; sounds:onEntry(entry,controller.allSources) end,allSources({STAFF=showStaff}))
+      assert(controller:start())
+      local first="1. Corin refers Aerin North (sample-user): 'First fixture.' [4 secs ago.]"
+      f:line(first); f:line(first)
+      f.epochValue=104; f:line("<Nera O'Vale refers Tara O'Fen (sample_42): 'Wrapped fixture")
+      f:line("body.'>"); f:line("Unrelated output after completion.")
+      eq(accepted,2); eq(f.storageAppends,2); eq(#controller:entries(),showStaff and 2 or 0)
+      local expected=(staffSound or showStaff) and 2 or 0
+      eq(#f.played,expected)
+      for _,played in ipairs(f.played) do eq(played.sound,staffSound and "staff" or "all"); eq(played.volume,25) end
+      assert(controller:setFilter("STAFF")); eq(#controller:entries(),2)
+      assert(controller:setAllSources(allSources({STAFF=not showStaff}))); controller:notify()
+      eq(#f.played,expected); eq(accepted,2); eq(f.outboundCalls,0); eq(f.gagCalls,0); assert(controller:shutdown())
+    end
+  end
+end)
+
+test("unfinished STAFF referrals use one bounded idle timer and persist once on timeout",function()
+  for _,kind in ipairs({"list","detail"}) do
+    local f=referralAdapter(); local accepted=0
+    local controller=makeController(f,nil,function() accepted=accepted+1 end)
+    assert(controller:start()); assert(controller:setFilter("STAFF"))
+    local first=(kind=="list" and "1. " or "<").."Corin refers Aerin North (sample-user): 'Unfinished fixture"
+    f:line(first); f:line("continued fixture body.")
+    eq(f:count(f.timers),1); eq(#f.delays,2); eq(f.delays[1],.4); eq(f.delays[2],.4); eq(accepted,0)
+    f:fireTimer(); eq(f.storageAppends,1); eq(accepted,1); eq(controller:entries()[1].line,first.." continued fixture body.")
+    eq(controller:entries()[1].staff_referral,nil); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+    f:line("Unrelated output after idle flush."); f:fireTimer(); eq(f.storageAppends,1); eq(accepted,1)
+    assert(controller:shutdown())
+  end
+end)
+
+test("STAFF referral buffers cap initial and continued text at 4000 characters and flush at twenty lines",function()
+  for _,kind in ipairs({"list","detail"}) do
+    for _,overflow in ipairs({"initial","continuation","lines"}) do
+      local f=referralAdapter(); local accepted=0
+      local controller=makeController(f,nil,function() accepted=accepted+1 end)
+      assert(controller:start()); assert(controller:setFilter("STAFF"))
+      local first=(kind=="list" and "1. " or "<").."Corin refers Aerin North (sample-user): '"
+      f:line(first..(overflow=="initial" and string.rep("x",5000) or "bounded fixture"))
+      if overflow=="continuation" then f:line(string.rep("y",5000)) end
+      if overflow=="lines" then
+        for index=2,19 do f:line("wrapped fixture line "..index) end
+        eq(f.storageAppends,0); eq(accepted,0); eq(f:count(f.timers),1)
+        f:line("wrapped fixture line 20")
+      end
+      eq(f.storageAppends,1); eq(accepted,1); eq(controller.pendingStaffMessage,nil); eq(next(f.timers),nil)
+      local entry=controller:entries()[1]
+      assert(#entry.message<=4000); assert(#entry.line<=4000); eq(entry.staff_referral,nil)
+      if overflow=="lines" then assert(entry.message:find("wrapped fixture line 20",1,true)) else eq(#entry.message,4000) end
+      f:line("Unrelated overflow remainder."); f:fireTimer(); eq(f.storageAppends,1); eq(accepted,1)
+      assert(controller:shutdown())
+    end
+  end
+end)
+
+test("STAFF referral persistence reload and handoff preserve hidden history metadata and silent restoration",function()
+  local f=referralAdapter(); local accepted=0; local originalAppend=f.storage.append
+  function f.storage:append(entry)
+    eq(entry.staff_referral,nil)
+    return originalAppend(self,copyRetentionValue(entry))
+  end
+  local sources=allSources({STAFF=false})
+  local controller=makeController(f,nil,function() accepted=accepted+1 end,sources)
+  assert(controller:start()); assert(controller:setFilter("STAFF"))
+  f:line("1. Corin refers Aerin North (sample-user): 'First fixture.' [4 secs ago.]")
+  f.epochValue=104; f:line("<Nera O'Vale refers Tara O'Fen (sample_42): 'Wrapped fixture")
+  f:line("body.'>")
+  f.epochValue=108; f:line("[GM] Keeper North is handling Nera O'Vale's referral.  (3 more pending.)")
+  local expected=copyRetentionValue(controller:entries()); eq(#expected,3); eq(accepted,3)
+  local handoff=controller:handoff(); sameEntries(handoff.entries,expected); assert(controller:shutdown())
+  for _,mode in ipairs({"reload","handoff"}) do
+    local restoredAdapter=referralAdapter(f.appendedEntries); restoredAdapter.character="SyntheticBeta"; restoredAdapter.epochValue=108
+    local alerts=0; local restored=makeController(restoredAdapter,nil,function() alerts=alerts+1 end,sources)
+    if mode=="handoff" then assert(restored:restoreHandoff(handoff)) end
+    assert(restored:start(true)); eq(alerts,0); eq(restoredAdapter.storageAppends,0)
+    eq(restoredAdapter.loadRecentCalls,mode=="reload" and 1 or 0)
+    assert(restored:setFilter("ALL")); eq(#restored:entries(),0)
+    assert(restored:setFilter("STAFF")); sameEntries(restored:entries(),expected)
+    for _,entry in ipairs(restored:entries()) do eq(entry.staff_referral,nil) end
+    if mode=="handoff" then restoredAdapter:line(expected[3].line); eq(restoredAdapter.storageAppends,0); eq(alerts,0) end
+    restoredAdapter.epochValue=112; restoredAdapter:line("<Rook Vale refers Lark South (sample-user): 'Fresh fixture.'>")
+    eq(alerts,1); eq(restoredAdapter.storageAppends,1); eq(#restored:entries(),4)
+    eq(restored:entries()[4].character,"SyntheticBeta"); eq(restoredAdapter.storageClears,0); assert(restored:shutdown())
+  end
+end)
+
+test("handoff and shutdown flush unfinished STAFF referrals without alerts or late duplicate persistence",function()
+  for _,action in ipairs({"handoff","shutdown"}) do
+    for _,kind in ipairs({"list","detail"}) do
+      local f=referralAdapter(); local accepted=0
+      local controller=makeController(f,nil,function() accepted=accepted+1 end,allSources({STAFF=false}))
+      assert(controller:start()); assert(controller:setFilter("STAFF"))
+      local first=(kind=="list" and "1. " or "<").."Corin refers Aerin North (sample-user): 'Unfinished fixture"
+      f:line(first); f:line("continued fixture body."); local _,lateTimer=next(f.timers)
+      local handoff=controller[action](controller)
+      eq(accepted,0); eq(f.storageAppends,1); eq(#controller:entries(),1); eq(next(f.timers),nil)
+      eq(controller:entries()[1].line,first.." continued fixture body."); eq(controller:entries()[1].staff_referral,nil)
+      if action=="handoff" then eq(handoff.filter,"STAFF"); sameEntries(handoff.entries,controller:entries()); eq(handoff.entries[1].staff_referral,nil) end
+      lateTimer(); assert(controller:shutdown()); eq(f.storageAppends,1); eq(accepted,0); eq(f:count(f.triggers),0)
+    end
+  end
+end)
+
 local function retentionController(f,limit,sources,onChange,onAccepted)
   local settings={visible_limit=limit or 1000,dedupe_seconds=3,all_sources=sources or allSources(),
     timestamps=false,tab_order={"STAFF","ALL","ROOM","PRIVATE","COMBAT"},personal_option="synthetic-option"}

@@ -1,5 +1,91 @@
 local Parser=require("chat_parser")
 
+-- Referral fixtures are synthetic and never contain player report text.
+test("STAFF referrals parse numbered and detail forms with full names accounts and original lines",function()
+  local now="2026-10-10T12:00:00Z"
+  for _,names in ipairs({{"Corin","Aerin North"},{"Nera O'Vale","Tara O'Fen"},{"Rook-7 Vale","Lark_2 South"}}) do
+    for _,account in ipairs({"sample-user","Sample_42.user-name","a1"}) do
+      for _,kind in ipairs({"list","detail"}) do
+        local payload=names[1].." refers "..names[2].." ("..account.."): 'An item is misflagged.'"
+        local line=kind=="list" and "17. "..payload.." [2 days, 4 secs ago.]" or "<"..payload..">"
+        local message="refers "..names[2].." ("..account.."): 'An item is misflagged.'"..(kind=="list" and " [2 days, 4 secs ago.]" or ">")
+        for _,input in ipairs({line," \t\27[35m"..line.."\27[0m \r\n"}) do
+          local entry=assert(Parser.parse(input,"Synthetic Keeper",now),line)
+          eq(entry.schema,1); eq(entry.category,"STAFF"); eq(entry.source,"builtin")
+          eq(entry.speaker,names[1]); eq(entry.target,names[2]); eq(entry.language,nil)
+          eq(entry.character,"Synthetic Keeper"); eq(entry.timestamp,now)
+          eq(entry.message,message); eq(entry.line,line); eq(entry.staff_referral,kind)
+        end
+      end
+    end
+  end
+end)
+
+test("STAFF referral parser preserves multiline body and age with embedded quotes and angle brackets",function()
+  local body="The fixture's label says \"Corin refers\" and contains '>' in the middle.\n2. This numbered sentence is body text.\nThe item remains misflagged."
+  for _,kind in ipairs({"list","detail"}) do
+    local tail=kind=="list" and "'\n[2 days,\n4 secs ago.]" or "'>"
+    local message="refers Aerin North (sample_42.user-name): '"..body..tail
+    local line=(kind=="list" and "8. " or "<").."Nera O'Vale "..message
+    local entry=assert(Parser.parse("\27[36m"..line.."\27[0m","Synthetic Keeper"))
+    eq(entry.speaker,"Nera O'Vale"); eq(entry.target,"Aerin North")
+    eq(entry.category,"STAFF"); eq(entry.message,message); eq(entry.line,line); eq(entry.staff_referral,kind)
+  end
+end)
+
+test("STAFF incomplete referral headers retain their framing for bounded controller buffering",function()
+  for _,kind in ipairs({"list","detail"}) do
+    for _,body in ipairs({"","The item's label wraps"}) do
+      local message="refers Aerin North (sample-user): '"..body
+      local line=(kind=="list" and "1. " or "<").."Corin "..message
+      local entry=assert(Parser.parse(line,"Synthetic Keeper"))
+      eq(entry.category,"STAFF"); eq(entry.speaker,"Corin"); eq(entry.target,"Aerin North")
+      eq(entry.message,message); eq(entry.line,line); eq(entry.staff_referral,kind)
+    end
+  end
+end)
+
+test("STAFF referral handling uses handler as speaker and referrer as target",function()
+  for _,names in ipairs({{"Keeper","Corin"},{"Keeper O'Vale","Corin North"},{"Rook-7 Vale","Tara O'Fen"}}) do
+    for _,pending in ipairs({"0","3","12"}) do
+      local line="[GM] "..names[1].." is handling "..names[2].."'s referral.  ("..pending.." more pending.)"
+      local entry=assert(Parser.parse("\27[35m"..line.."\27[0m","Synthetic Keeper"))
+      eq(entry.category,"STAFF"); eq(entry.speaker,names[1]); eq(entry.target,names[2]); eq(entry.line,line)
+      eq(entry.message,"is handling "..names[2].."'s referral ("..pending.." more pending).")
+      eq(entry.source,"builtin"); eq(entry.staff_referral,nil)
+    end
+  end
+end)
+
+test("STAFF referral parser rejects malformed account framing command echoes and ordinary narration",function()
+  for _,line in ipairs({
+    "Corin refers Aerin North (sample-user): 'An item is misflagged.'",
+    "The sign reads: <Corin refers Aerin North (sample-user): 'An item is misflagged.'>",
+    ">refer 1",">1. Corin refers Aerin North (sample-user): 'An item is misflagged.' [2 days ago.]",
+    "1 Corin refers Aerin North (sample-user): 'An item is misflagged.' [2 days ago.]",
+    "1. Corin refers Aerin North (sample-user): An item is misflagged.",
+    "<Corin refers Aerin North (): 'An item is misflagged.'>",
+    "<Corin refers Aerin North (sample user): 'An item is misflagged.'>",
+    "<Corin refers Aerin North (sample/user): 'An item is misflagged.'>",
+    "<Corin refers Aerin North (sample+user): 'An item is misflagged.'>",
+    "[2 days, 4 secs ago.]","[GM] Keeper is handling Corin's referral.",
+  }) do eq(Parser.parse(line,"Synthetic Keeper"),nil) end
+end)
+
+test("quoted referrals retain normal ROOM OWN WHISPER and STAFF chat categories",function()
+  local text="<Corin refers Aerin North (sample-user): 'An item is misflagged.'>"
+  for _,case in ipairs({
+    {line='Lark says, "'..text..'"',category="ROOM",speaker="Lark"},
+    {line='Synthetic Keeper says, "'..text..'"',category="OWN",speaker="Synthetic Keeper"},
+    {line='Lark whispers to you, "'..text..'"',category="WHISPER",speaker="Lark"},
+    {line="[GM] Keeper: "..text,category="STAFF",speaker="Keeper"},
+  }) do
+    local entry=assert(Parser.parse(case.line,"Synthetic Keeper"))
+    eq(entry.category,case.category); eq(entry.speaker,case.speaker); eq(entry.message,text)
+    eq(entry.line,case.line); eq(entry.staff_referral,nil)
+  end
+end)
+
 
 test("WORLD parses anchored arrival departure and unexpected departure notifications with full speaker names",function()
   local now="2026-10-04T12:34:56-04:00"
