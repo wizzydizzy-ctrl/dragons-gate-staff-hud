@@ -2,7 +2,7 @@
 
 The independently versioned Staff edition of the bronze-and-jade Mudlet 5 HUD for Dragons Gate. It displays confirmed `Char.Status`, `Char.Vitals`, and `Room` GMCP values, including `weapon_readied` and `shield_readied`.
 
-Documentation covers **DGHUD v0.3.108**.
+Documentation covers **DGHUD v0.3.109**.
 
 ## Quick start
 
@@ -43,7 +43,16 @@ dghud update
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Clear next steps for common problems. |
 | [Support, privacy, and saved files](docs/SUPPORT_PRIVACY_AND_FILES.md) | Feedback, debug reports, local files, and backups. |
 
-## Latest changes — v0.3.108
+## Latest changes — v0.3.109
+
+- Manually requested staff `who` reports sort by **Sysop → Admin → GM → Designer → Supporter → Normal**, with unknown Access labels grouped alphabetically, ignoring case, before Normal.
+- Within each Access group, IP addresses sort numerically: IPv4 first, then IPv6. Equal addresses keep the original record order.
+- The existing **Room / Name / Username / Access / Rgn / IP Address** columns stay aligned; attached character lines follow their owner, and the adventurer count stays unchanged.
+- Formatting adds no automatic WHO queries, permissions, chat forwarding, or separate storage.
+
+[Read about Staff WHO formatting](docs/COMMAND_REFERENCE.md#staff-who-formatting).
+
+## Previous changes — v0.3.108
 
 - Manually requested `breakd wealth` / `breakdown wealth` reports display in the main console as **Name** / **Silver**, sorted highest to lowest. Names align left; silver uses commas and aligns right.
 - Zero balances remain included; equal balances keep the game's original order.

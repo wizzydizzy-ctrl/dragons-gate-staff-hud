@@ -116,6 +116,11 @@ local function fake()
   function f:replaceWealthOutput(rows)
     self.wealthBatches=self.wealthBatches or {}; self.wealthBatches[#self.wealthBatches+1]=rows; return true
   end
+  function f:addWhoDisplayTrigger(fn)
+    self.next=self.next+1; local id="who-trigger-"..self.next
+    self.triggers[id]=fn; self.whoTrigger=id; return id
+  end
+  function f:replaceWhoOutput(rows) self.whoBatches=self.whoBatches or {}; self.whoBatches[#self.whoBatches+1]=rows; return true end
   function f:replaceSkillOutput(rows) self.replacedSkills=rows; return true end
   function f:reportColorizerStatus(enabled) self.reportedColorizer=enabled; return true end
   function f:saveColorSettings(config)
@@ -1547,7 +1552,7 @@ test("resize preserves chat controller history and trigger ownership",function()
   eq(f.layouts[#f.layouts].chat_height>160,true); eq(f.set_borders[2],f.layouts[#f.layouts].console_top)
 end)
 test("controller merges collector snapshots and removes owned trigger runtime",function()
-  local f=fake(); local hud=Main.new(f,{layout={}}); hud:start(); hud.collector.snapshot.info={attributes={STR="Good"}}; hud:refresh(); eq(hud.last_state.attributes.STR,"Good"); eq(f:count(f.triggers),7); hud:shutdown(); eq(f:count(f.triggers),0); eq(f:count(f.timers),0)
+  local f=fake(); local hud=Main.new(f,{layout={}}); hud:start(); hud.collector.snapshot.info={attributes={STR="Good"}}; hud:refresh(); eq(hud.last_state.attributes.STR,"Good"); eq(f:count(f.triggers),8); hud:shutdown(); eq(f:count(f.triggers),0); eq(f:count(f.timers),0)
 end)
 local function visibilityRuntime(collectorFirst)
   local f=fake(); f.gmcp={Char={Status={name="Synthetic",surname="Tester"},Vitals={}}}
@@ -1942,7 +1947,7 @@ test("a different character welcome performs another opted-in update without dis
   eq(checks,2); eq(#completions,2)
 end)
 test("reload leaves one command collector",function()
-  local f=fake(); local hud=Main.new(f,{layout={}}); hud:start(); hud:reload(); eq(f:count(f.triggers),7); local outgoing=0; for _,name in pairs(f.events) do if name=="sysDataSendRequest" then outgoing=outgoing+1 end end; eq(outgoing,4)
+  local f=fake(); local hud=Main.new(f,{layout={}}); hud:start(); hud:reload(); eq(f:count(f.triggers),8); local outgoing=0; for _,name in pairs(f.events) do if name=="sysDataSendRequest" then outgoing=outgoing+1 end end; eq(outgoing,5)
 end)
 
 test("runtime wires one automapper handler per event and cleans it exactly",function()
@@ -1950,8 +1955,8 @@ test("runtime wires one automapper handler per event and cleans it exactly",func
   local personal=f:addEvent("gmcp.Room.Info",function() end); local hud=Main.new(f,{layout={}}); assert(hud:start())
   eq(f.createdMaps,1); eq(hud.automapper:currentRoom(),100)
   local function count(name) local n=0; for _,value in pairs(f.events) do if value==name then n=n+1 end end; return n end
-  eq(count("gmcp.Room.Info"),2); eq(count("gmcp.Room.WrongDir"),1); eq(count("sysDisconnectionEvent"),4); eq(count("sysDataSendRequest"),4)
-  hud:reload(); eq(f.createdMaps,2); eq(count("gmcp.Room.Info"),2); eq(count("gmcp.Room.WrongDir"),1); eq(count("sysDataSendRequest"),4)
+  eq(count("gmcp.Room.Info"),2); eq(count("gmcp.Room.WrongDir"),1); eq(count("sysDisconnectionEvent"),5); eq(count("sysDataSendRequest"),5)
+  hud:reload(); eq(f.createdMaps,2); eq(count("gmcp.Room.Info"),2); eq(count("gmcp.Room.WrongDir"),1); eq(count("sysDataSendRequest"),5)
   hud:shutdown(); eq(f.events[personal],"gmcp.Room.Info"); eq(count("gmcp.Room.Info"),1); eq(count("gmcp.Room.WrongDir"),0); eq(count("sysDataSendRequest"),0)
 end)
 
@@ -2682,10 +2687,10 @@ test("chat trigger registration failure rolls back partial HUD runtime",function
 end)
 test("chat runtime has one owned trigger and cached personal API survives reload safely",function()
   local f=fake(); local unrelated=f:addLineTrigger(function() end); local hud=Main.new(f,{layout={}}); hud:start()
-  eq(hud.chat.started,true); eq(f:count(f.triggers),8)
+  eq(hud.chat.started,true); eq(f:count(f.triggers),9)
   DGHUD={controller=hud}; Main.installChatApi(DGHUD); local capture=DGHUD.chat.capture
   assert(capture("QUEST","before reload")); hud:reload(); DGHUD={controller=hud}; Main.installChatApi(DGHUD)
-  eq(f:count(f.triggers),8); eq(f.loadRecentCalls,2); eq(#hud.chat:entries(),1); eq(hud.chat:entries()[1].message,"before reload")
+  eq(f:count(f.triggers),9); eq(f.loadRecentCalls,2); eq(#hud.chat:entries(),1); eq(hud.chat:entries()[1].message,"before reload")
   assert(capture("QUEST","after reload")); eq(#hud.chat:entries(),2); eq(hud.chat:entries()[2].message,"after reload")
   hud:shutdown(); eq(f:count(f.triggers),1); eq(f.triggers[unrelated]~=nil,true)
   local result,err=capture("QUEST","during shutdown"); eq(result,nil); eq(err,"chatbox is not running"); DGHUD=nil
@@ -4401,6 +4406,54 @@ test("wealth runtime missing hooks and trigger failure retain a working raw-outp
     f:emit("sysDataSendRequest","sysDataSendRequest","breakd wealth"); flushWealthRuntime(f)
     eq(f.wealthBatches,nil); assert(hud.started); hud:shutdown()
     eq(next(f.events),nil); eq(next(f.triggers),nil); eq(next(f.timers),nil)
+  end
+end)
+
+local function whoRuntimePending(f,hud)
+  f:emit("sysDataSendRequest","sysDataSendRequest","who")
+  local trigger=assert(f.triggers[f.whoTrigger])
+  trigger(" Room  Name  Username  Access  Rgn  IP Address",50)
+  trigger("  100  Synthetic Person  fixture_runtime  Normal  1  192.0.2.1",51)
+  trigger("You notice 1 adventurer.",52)
+  return assert(f.timers[assert(hud.who_display.timer)])
+end
+
+test("WHO runtime startup is passive and observes exact manual commands once",function()
+  local f=fake(); local hud=Main.new(f,{layout={},edition="staff",chat={enabled=false},mapper={enabled=false}})
+  assert(hud:start()); assert(hud.who_display and hud.who_display.started); eq(f.sentCommands,nil); eq(f.whoBatches,nil)
+  local observed,calls; calls=0
+  local outgoing=hud.who_display.onOutgoing
+  hud.who_display.onOutgoing=function(self,command) calls=calls+1; observed=command; return outgoing(self,command) end
+  local late=whoRuntimePending(f,hud); eq(calls,1); eq(observed,"who"); eq(f.sentCommands,nil); eq(f.whoBatches,nil)
+  local id=hud.who_display.timer; f.timers[id]=nil; late()
+  eq(#f.whoBatches,1); eq(#f.whoBatches[1],2); eq(f.whoBatches[1][1].line_number,50)
+  eq(f.sentCommands,nil); hud:shutdown(); eq(next(f.timers),nil)
+end)
+
+test("WHO runtime lifecycle retires pending generations across character and package replacement",function()
+  for _,boundary in ipairs({"disconnect","exit","entry","shutdown","reload","update"}) do
+    local f=fake(); local hud=Main.new(f,{layout={},chat={enabled=false},mapper={enabled=false}})
+    assert(hud:start()); local display=assert(hud.who_display); local trigger=display.trigger
+    local late=whoRuntimePending(f,hud)
+    if boundary=="disconnect" then f:emit("sysDisconnectionEvent")
+    elseif boundary=="exit" then hud:onCharacterExit("menu")
+    elseif boundary=="entry" then hud:onCharacterEntry("Synthetic")
+    elseif boundary=="reload" then assert(hud:reload())
+    else if boundary=="update" then hud.update_handoff=true end; hud:shutdown() end
+    late(); eq(f.whoBatches,nil); eq(display.pending,nil); eq(display.timer,nil)
+    if boundary=="reload" then assert(hud.who_display~=display); eq(f.triggers[trigger],nil) end
+    hud:shutdown(); eq(next(f.timers),nil)
+  end
+end)
+
+test("WHO runtime refuses player edition and absent native capabilities",function()
+  for _,mode in ipairs({"player","trigger","replace"}) do
+    local f=fake()
+    if mode=="trigger" then f.addWhoDisplayTrigger=nil elseif mode=="replace" then f.replaceWhoOutput=nil end
+    local hud=Main.new(f,{layout={},edition=mode=="player" and "player" or "staff",chat={enabled=false},mapper={enabled=false}})
+    assert(hud:start()); eq(hud.who_display,nil); eq(f.sentCommands,nil)
+    f:emit("sysDataSendRequest","sysDataSendRequest","who"); eq(f.whoBatches,nil)
+    hud:shutdown(); eq(next(f.events),nil); eq(next(f.triggers),nil); eq(next(f.timers),nil)
   end
 end)
 

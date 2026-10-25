@@ -75,6 +75,7 @@ moduleNames[#moduleNames+1]="chat_channels"
 moduleNames[#moduleNames+1]="chat_outgoing"; moduleNames[#moduleNames+1]="visibility_tracker"
 moduleNames[#moduleNames+1]="chat_size"
 moduleNames[#moduleNames+1]="wealth_display"
+moduleNames[#moduleNames+1]="who_display"
 for _,name in ipairs(moduleNames) do package.loaded[name]=nil end
 local defaults=require("defaults")
 local Settings=require("settings")

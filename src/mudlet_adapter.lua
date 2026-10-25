@@ -489,6 +489,115 @@ function Adapter:addColorizerTrigger(fn)
   end)
 end
 function Adapter:addSkillDisplayTrigger(fn) return self:addColorizerTrigger(fn) end
+function Adapter:addWhoDisplayTrigger(fn) return self:addColorizerTrigger(fn) end
+function Adapter:replaceWhoOutput(rows,api)
+  api=api or _G
+  if type(api)~="table" then return nil,"Mudlet WHO replacement API is unavailable" end
+  local required={"getLines","getLineNumber","getColumnNumber","getBackgroundColor","moveCursor",
+    "selectSection","replace","setFgColor","setBgColor","setBold","setUnderline","deselect","resetFormat"}
+  for _,key in ipairs(required) do
+    if type(api[key])~="function" then return nil,"Mudlet WHO replacement API "..key.." is unavailable" end
+  end
+  local function integer(value)
+    return type(value)=="number" and value>=0 and value<math.huge and value%1==0
+  end
+  local function plain(value) return type(value)=="table" and getmetatable(value)==nil end
+  local function text(value,limit,source)
+    return type(value)=="string" and #value>0 and #value<=limit
+      and not value:find(source and "[^\t -~]" or "[^ -~]") and not value:find("[<>]")
+  end
+  local segments,byLine={},{}
+  local originalLine,originalColumn
+  local ready,why=pcall(function()
+    assert(plain(rows) and #rows>=1 and #rows<=1537,"invalid WHO output rows")
+    local count=0
+    for key in pairs(rows) do
+      assert(integer(key) and key>=1 and key<=#rows,"invalid WHO output index")
+      count=count+1
+    end
+    assert(count==#rows,"WHO output rows must be dense")
+    local Display=require("who_display")
+    local previous,owner,records,continuations=-1,nil,0,0
+    for index,row in ipairs(rows) do
+      assert(plain(row),"invalid WHO output row")
+      for key in pairs(row) do
+        assert(key=="line_number" or key=="source_line" or key=="display_text","invalid WHO output field")
+      end
+      assert(integer(row.line_number) and row.line_number>previous,"invalid WHO output coordinate")
+      assert(text(row.source_line,512,true),"invalid WHO source line")
+      assert(text(row.display_text,256),"invalid WHO display text")
+      if index==1 then
+        assert(Display.isHeader(row.source_line),"WHO output requires its original header")
+      else
+        local record=Display.parseRow(row.source_line)
+        if record then
+          records=records+1
+          assert(records<=Display.MAX_ROWS,"too many WHO records")
+          owner=record; continuations=0
+        else
+          local continuation=Display.parseContinuation(row.source_line)
+          assert(owner and continuation and owner.username:lower()==continuation.username:lower()
+            and continuations<Display.MAX_CONTINUATIONS,"invalid WHO continuation")
+          continuations=continuations+1
+        end
+      end
+      local segment={start=1,line_number=row.line_number,source_line=row.source_line,
+        display_text=row.display_text,color={220,224,220},bold=false,underline=false}
+      segments[index]=segment; byLine[row.line_number]=segment
+      previous=row.line_number
+    end
+    originalLine=api.getLineNumber(); originalColumn=api.getColumnNumber()
+    assert(integer(originalLine) and integer(originalColumn),"current console coordinate is unavailable")
+    local r,g,b=api.getBackgroundColor("main")
+    assert(integer(r) and r<=255 and integer(g) and g<=255 and integer(b) and b<=255,
+      "main console background is unavailable")
+    for _,segment in ipairs(segments) do
+      local current=api.getLines(segment.line_number,segment.line_number+1)
+      local source=type(current)=="table" and current[1]
+      -- Match every original slot before editing. Only native trailing space
+      -- padding may differ; select the actual full line to avoid stale tails.
+      assert(text(source,512,true) and source:gsub(" +$","")==segment.source_line:gsub(" +$",""),
+        "WHO source row changed")
+      segment.source_line=source; segment.length=#source; segment.background={r,g,b}
+    end
+  end)
+  if not ready then return nil,tostring(why) end
+
+  -- WHO must report a skipped row or failed setter. These guards leave the
+  -- shared colorizer, skill, and wealth replacement behavior unchanged.
+  local guarded={}
+  local failure
+  local function checked(key,...)
+    local called,value,err=pcall(api[key],...)
+    if not called or value==false or (value==nil and err~=nil) or (key=="moveCursor" and value~=true) then
+      failure="Mudlet WHO replacement API "..key.." failed"
+      error(failure)
+    end
+    return value,err
+  end
+  for _,key in ipairs(required) do
+    local name=key
+    guarded[name]=function(...) return checked(name,...) end
+  end
+  guarded.getLines=function(first,last)
+    local current=api.getLines(first,last)
+    local segment=byLine[first]
+    assert(segment and type(current)=="table" and current[1]==segment.source_line,
+      "WHO source row changed during replacement")
+    return current
+  end
+  local called,result,err=pcall(self.applyLineColors,self,segments,guarded)
+  -- No insertion, deletion, footer edit, echo, logging, or command dispatch.
+  local clean,cleanupErr=pcall(function() checked("deselect") end)
+  local restored,restoreErr=pcall(function() checked("moveCursor",originalColumn,originalLine) end)
+  local reset,resetErr=pcall(function() checked("resetFormat") end)
+  if not called then return nil,tostring(result) end
+  if not result then return nil,tostring(err or failure or "WHO replacement failed") end
+  if failure or not clean or not restored or not reset then
+    return nil,tostring(failure or cleanupErr or restoreErr or resetErr)
+  end
+  return true
+end
 function Adapter:addWealthDisplayTrigger(fn) return self:addColorizerTrigger(fn) end
 function Adapter:replaceWealthOutput(rows,api)
   api=api or _G

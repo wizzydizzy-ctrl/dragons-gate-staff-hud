@@ -23,6 +23,7 @@ MODULES.append('chat_channels')
 MODULES.extend(('chat_outgoing','visibility_tracker'))
 MODULES.append('chat_size')
 MODULES.append('wealth_display')
+MODULES.append('who_display')
 VIEW_CONTRACT_FILES=('view.lua','navigation.lua','skill_settings_view.lua','chat_channels.lua','chat_sounds.lua','chat_size.lua')
 def view_contract():
     digest=hashlib.sha256()

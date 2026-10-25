@@ -2,7 +2,7 @@
 
 [Back to the Complete DGHUD Guide](DGHUD_GUIDE.md)
 
-Applies to DGHUD v0.3.108.
+Applies to DGHUD v0.3.109.
 
 Use the lowercase commands shown below. Skill filters ignore case; other HUD aliases may require the exact lowercase spelling.
 
@@ -36,6 +36,14 @@ For setup and repair steps, see [Installation and First Start](INSTALLATION_AND_
 When you run the game's `breakd wealth` (or `breakdown wealth`) command, DGHUD formats a complete response in the main console as two columns: **Name** and **Silver**. Names are left-aligned; silver amounts are right-aligned with comma thousands separators and sorted from highest to lowest. Zero balances are included, and tied balances keep the game's original order.
 
 This only changes the main-display layout of that requested report. It adds no game queries, separate wealth storage, chat forwarding, or access to the command. The game's permissions still apply. Incomplete responses remain unchanged; malformed or stale source rows fail validation before any replacement.
+
+## Staff WHO formatting
+
+Manually run the game's `who` command. When it returns the full staff table, DGHUD keeps its **Room / Name / Username / Access / Rgn / IP Address** columns aligned and groups records by **Sysop → Admin → GM → Designer → Supporter → Normal**. Unrecognized access levels remain visible, alphabetically between Supporter and Normal.
+
+Within each access group, IPv4 addresses sort numerically first, followed by numeric IPv6 addresses. Equivalent compressed IPv6 spellings share the same sorting value. Equal addresses keep the game's original order; a parenthesized attached character line stays with its owner. The adventurer count and unrelated output stay unchanged.
+
+This only formats a complete, manually requested staff report. It adds no WHO queries, permissions, chat forwarding, debug uploads, or separate storage for usernames/IP addresses. The Player HUD is unchanged. Missing, malformed, or mismatched record counts leave the original report alone.
 
 ## Rune renewal and training shortcuts
 

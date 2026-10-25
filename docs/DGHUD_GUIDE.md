@@ -1,6 +1,6 @@
 # Complete DGHUD Guide
 
-Applies to DGHUD **v0.3.108**. Older screenshots and messages may use different labels.
+Applies to DGHUD **v0.3.109**. Older screenshots and messages may use different labels.
 
 DGHUD is a Mudlet HUD for Dragons Gate. It organizes important character information, communication, navigation, and utility tools around the normal game display. It does not replace Dragons Gate commands, and it does not require you to edit Lua scripts for ordinary use.
 
@@ -24,7 +24,16 @@ dghud check
 
 To install a newer release, run `dghud update`. If it reports that you are already current, nothing is reinstalled. Use `dghud refresh` for stale character information instead.
 
-## What's new in v0.3.108
+## What's new in v0.3.109
+
+- Complete, manually requested staff `who` reports group records by **Sysop → Admin → GM → Designer → Supporter → Normal**. Unknown Access labels sort alphabetically, ignoring case, before Normal.
+- Each Access group sorts by numeric IP address, IPv4 before IPv6, with stable ordering for equal addresses.
+- All six existing columns stay aligned: **Room / Name / Username / Access / Rgn / IP Address**. Attached character lines remain with their owner; the adventurer count and unrelated output stay unchanged.
+- This formatter adds no automatic WHO queries, permissions, chat forwarding, or separate storage.
+
+See [Staff WHO formatting](COMMAND_REFERENCE.md#staff-who-formatting).
+
+## Previous changes in v0.3.108
 
 Manually running the game's `breakd wealth` (or `breakdown wealth`) now formats a complete report in the main console with **Name** and **Silver** columns. Names align left; silver amounts use commas, align right, and sort highest to lowest. Zero balances are included, and ties keep the original response order.
 
