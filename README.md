@@ -2,7 +2,7 @@
 
 The independently versioned Staff edition of the bronze-and-jade Mudlet 5 HUD for Dragons Gate. It displays confirmed `Char.Status`, `Char.Vitals`, and `Room` GMCP values, including `weapon_readied` and `shield_readied`.
 
-Documentation covers **DGHUD v0.3.109**.
+Documentation covers **DGHUD v0.3.110**.
 
 ## Quick start
 
@@ -43,7 +43,16 @@ dghud update
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Clear next steps for common problems. |
 | [Support, privacy, and saved files](docs/SUPPORT_PRIVACY_AND_FILES.md) | Feedback, debug reports, local files, and backups. |
 
-## Latest changes — v0.3.109
+## Latest changes — v0.3.110
+
+- Fixed WHO sorting not starting when a personal `who` alias sends `who all`. Both commands now work without changing personal aliases.
+- Staff WHO lists group by **Sysop → Admin → GM → Designer → Supporter → Normal**, then by **room number, lowest first**. Unknown Access labels remain alphabetically before Normal; equal room numbers keep the original order.
+- All six columns, attached character lines, and the adventurer count remain intact. IP addresses remain visible but no longer affect sorting.
+- Regression coverage includes the alias expansion, numeric room ordering, same-room ties, and incomplete or unrelated reports. No additional game queries or saved WHO records were added.
+
+[Read about Staff WHO formatting](docs/COMMAND_REFERENCE.md#staff-who-formatting).
+
+## Previous changes — v0.3.109
 
 - Manually requested staff `who` reports sort by **Sysop → Admin → GM → Designer → Supporter → Normal**, with unknown Access labels grouped alphabetically, ignoring case, before Normal.
 - Within each Access group, IP addresses sort numerically: IPv4 first, then IPv6. Equal addresses keep the original record order.

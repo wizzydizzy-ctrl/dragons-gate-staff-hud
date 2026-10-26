@@ -71,9 +71,10 @@ end
 local function late(f) for _,timer in ipairs(f.history) do timer.fn() end end
 local function untouched(f) eq(#f.batches,0); eq(next(f.timers),nil) end
 
-test("WHO accepts only an exact case-insensitive manual who command",function()
-  for _,value in ipairs({"who"," WHO ","\tWhO\t"}) do eq(Display.isCommand(value),true) end
-  for _,value in ipairs({"who all","who;look","who\nlook","who\r","who\0","> who","say who","whom","",false,42,{}}) do
+test("WHO accepts exact case-insensitive who and who all commands including alias expansions",function()
+  for _,value in ipairs({"who"," WHO ","\tWhO\t","who all"," WHO ALL ","\tWhO\t AlL\t"}) do eq(Display.isCommand(value),true) end
+  for _,value in ipairs({"who fixture","who all extra","whoall","who;look","who all;look","who all\nlook",
+      "who\nlook","who\r","who\0","who all\r","> who","say who","whom","",string.rep(" ",33).."who",false,42,{}}) do
     eq(Display.isCommand(value),false)
   end
   eq(Display.isCommand(nil),false)
@@ -116,16 +117,20 @@ test("WHO access precedence retains unknown levels alphabetically before Normal"
   for index,role in ipairs({"Sysop","Admin","GM","Designer","Supporter","alpha","Head-GM","Zeta","Normal"}) do eq(rows[index].access,role) end
   local folded={record(1,"gM","192.0.2.10"),record(2,"GM","192.0.2.2"),record(3,"Observer","192.0.2.10"),record(4,"observer","192.0.2.2")}
   local sorted=parsedRecords(assert(Display.formatRows(folded)))
-  eq(sorted[1].username,"fixture_2"); eq(sorted[2].username,"fixture_1")
-  eq(sorted[3].username,"fixture_4"); eq(sorted[4].username,"fixture_3")
+  eq(sorted[1].username,"fixture_1"); eq(sorted[2].username,"fixture_2")
+  eq(sorted[3].username,"fixture_3"); eq(sorted[4].username,"fixture_4")
 end)
 
-test("WHO numeric IPv4 precedes IPv6 and equivalent IPv6 addresses retain original order",function()
+test("WHO sorts room numbers numerically within access regardless of IP and keeps same-room ties stable",function()
   local ips={"2001:db8::10","192.0.2.10","2001:db8::2","2001:0db8:0:0:0:0:0:0002","192.0.2.2","2001:db8::9"}
-  local items={}; for index,ip in ipairs(ips) do items[index]=record(index,"GM",ip); items[index].ip_key={family=4,parts={0,0,0,0}} end
+  local rooms={"100","10","2","0002","0","9999999999"}
+  local items={}; for index,ip in ipairs(ips) do items[index]=record(index,"GM",ip); items[index].room=rooms[index] end
   local rows=parsedRecords(assert(Display.formatRows(items)))
-  for index,original in ipairs({5,2,3,4,6,1}) do eq(rows[index].username,items[original].username) end
-  local tied=parsedRecords(assert(Display.formatRows({record(2,"Normal","198.51.100.8"),record(1,"Normal","198.51.100.8")})))
+  for index,original in ipairs({5,3,4,2,1,6}) do eq(rows[index].username,items[original].username); eq(rows[index].ip,ips[original]) end
+  for index,item in ipairs(items) do eq(item.room,rooms[index]) end
+  local first,second=record(2,"Normal","2001:db8::10"),record(1,"Normal","192.0.2.1")
+  first.room="777"; second.room="777"
+  local tied=parsedRecords(assert(Display.formatRows({first,second})))
   eq(tied[1].username,"fixture_2"); eq(tied[2].username,"fixture_1")
 end)
 
@@ -145,7 +150,7 @@ test("WHO 33 synthetic records defer one guarded rewrite while preserving footer
   f:feed("Full who list activated!",1); f:feed("A synthetic bell rings.",2); f:feed(HEADER,100)
   local row=101
   for index=1,33 do
-    local item=record(index,"Normal","192.0.2."..(34-index))
+    local item=record(index,"Normal","192.0.2."..index); item.room=tostring(34-index)
     f:feed(raw(item),row); row=row+1
     if index==18 then f:feed(continuation("Synthetic Companions",item.username),row); row=row+1 end
   end
@@ -167,10 +172,34 @@ test("WHO 33 synthetic records defer one guarded rewrite while preserving footer
 end)
 
 test("WHO refuses unsolicited tables and public or missing staff headers",function()
-  for _,command in ipairs({false,"who","who all"}) do
+  for _,command in ipairs({false,"who","who fixture"}) do
     local f,d=fake(); if command then d:onOutgoing(command) end
     if command~= "who" then f:feed(HEADER,10) else f:feed("Name Race Profession",10) end
     f:feed(raw(record(1)),11); f:feed("You notice 1 adventurer.",12); f:advance(0); late(f); untouched(f); d:shutdown()
+  end
+end)
+
+test("WHO ALL and alias-expanded WHO requests format exactly one complete staff report",function()
+  for _,commands in ipairs({{"who all"},{" WHO\tALL "},{"who","who all"}}) do
+    local f,d=fake()
+    for _,command in ipairs(commands) do f:emit("sysDataSendRequest","sysDataSendRequest",command) end
+    f:feed(HEADER,10); f:feed(raw(record(1,"Normal")),11); f:feed(raw(record(2,"GM")),12)
+    f:feed("You notice 2 adventurers.",13); f:advance(0); late(f)
+    eq(#f.batches,1); eq(#f.batches[1],3)
+    eq(assert(Display.parseRow(f.batches[1][2].display_text)).access,"GM")
+    eq(f.lines[13],"You notice 2 adventurers."); d:shutdown()
+  end
+end)
+
+test("WHO ALL still requires a complete validated staff header and matching footer",function()
+  for _,mode in ipairs({"public","missing","count","malformed"}) do
+    local f,d=fake(); d:onOutgoing("who all")
+    if mode=="public" then f:feed("Name Race Profession",10)
+    elseif mode~="missing" then f:feed(HEADER,10) end
+    f:feed(raw(record(1)),11)
+    if mode=="malformed" then f:feed("100  Broken WHO row",12) end
+    f:feed(mode=="count" and "You notice 2 adventurers." or "You notice 1 adventurer.",13)
+    f:advance(0); late(f); untouched(f); d:shutdown()
   end
 end)
 

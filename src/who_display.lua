@@ -74,8 +74,11 @@ function Display.parseAddress(value)
   return {family=6,parts=parts}
 end
 function Display.isCommand(value)
-  return type(value)=="string" and #value<=32 and not value:find("[^\t -~]")
-    and value:lower():match("^[ \t]*who[ \t]*$")~=nil
+  if type(value)~="string" or #value>32 or value:find("[^\t -~]") then return false end
+  -- Observe the command actually sent, including personal aliases that expand
+  -- WHO to WHO ALL. Other arguments and command chains remain untouched.
+  local command=value:lower():match("^[ \t]*(.-)[ \t]*$")
+  return command=="who" or command:match("^who[ \t]+all$")~=nil
 end
 function Display.isHeader(value)
   local text=clean(value)
@@ -108,9 +111,9 @@ function Display.formatRows(items)
     if type(item)~="table" or not digits(item.room) or not name(item.name) or not username(item.username)
         or not access(item.access)
         or not digits(item.region) then return nil,"Invalid WHO record." end
-    local key=Display.parseAddress(item.ip); if not key then return nil,"Invalid WHO address." end
+    if not Display.parseAddress(item.ip) then return nil,"Invalid WHO address." end
     local row={item.room,item.name,item.username,item.access,item.region,item.ip}
-    local entry={row=row,key=key,access=item.access:lower(),index=index,continuations={}}
+    local entry={row=row,room=tonumber(item.room),access=item.access:lower(),index=index,continuations={}}
     measure(row)
     local attached=item.continuations or {}
     if type(attached)~="table" or #attached>Display.MAX_CONTINUATIONS then return nil,"Invalid WHO continuation." end
@@ -128,8 +131,7 @@ function Display.formatRows(items)
     local rankA,rankB=accessOrder[a.access] or 6,accessOrder[b.access] or 6
     if rankA~=rankB then return rankA<rankB end
     if a.access~=b.access then return a.access<b.access end
-    if a.key.family~=b.key.family then return a.key.family<b.key.family end
-    for i,part in ipairs(a.key.parts) do if part~=b.key.parts[i] then return part<b.key.parts[i] end end
+    if a.room~=b.room then return a.room<b.room end
     return a.index<b.index
   end)
   local function columns(values)

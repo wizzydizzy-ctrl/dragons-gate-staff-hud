@@ -1,6 +1,6 @@
 # Complete DGHUD Guide
 
-Applies to DGHUD **v0.3.109**. Older screenshots and messages may use different labels.
+Applies to DGHUD **v0.3.110**. Older screenshots and messages may use different labels.
 
 DGHUD is a Mudlet HUD for Dragons Gate. It organizes important character information, communication, navigation, and utility tools around the normal game display. It does not replace Dragons Gate commands, and it does not require you to edit Lua scripts for ordinary use.
 
@@ -24,7 +24,15 @@ dghud check
 
 To install a newer release, run `dghud update`. If it reports that you are already current, nothing is reinstalled. Use `dghud refresh` for stale character information instead.
 
-## What's new in v0.3.109
+## What's new in v0.3.110
+
+Staff WHO formatting now recognizes both `who` and `who all`, including personal aliases that send `who all`. Reports sort by Access first, then **room number from lowest to highest**, so people in the same room appear together within their Access group. Equal rooms retain the game's original order. IP addresses stay visible but are no longer a sorting key.
+
+Personal aliases, attached character lines, the adventurer count, and unrelated output are preserved. This adds no automatic game commands or saved WHO records.
+
+See [Staff WHO formatting](COMMAND_REFERENCE.md#staff-who-formatting).
+
+## Previous changes in v0.3.109
 
 - Complete, manually requested staff `who` reports group records by **Sysop → Admin → GM → Designer → Supporter → Normal**. Unknown Access labels sort alphabetically, ignoring case, before Normal.
 - Each Access group sorts by numeric IP address, IPv4 before IPv6, with stable ordering for equal addresses.

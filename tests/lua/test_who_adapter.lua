@@ -138,8 +138,8 @@ test("WHO native table preserves six aligned columns, owner continuation, footer
     end
   end
   eq(Display.parseRow(f.lines[4]).name,"Synthetic Sysop")
-  eq(Display.parseRow(f.lines[5]).name,"Synthetic Admin Two")
-  eq(Display.parseRow(f.lines[8]).name,"Synthetic Admin Ten")
+  eq(Display.parseRow(f.lines[5]).name,"Synthetic Admin Ten")
+  eq(Display.parseRow(f.lines[8]).name,"Synthetic Admin Two")
   eq(Display.parseRow(f.lines[11]).name,"Synthetic Normal")
   eq(Display.parseContinuation(f.lines[13]).username,"fixture.normal")
   local nameAt=f.lines[2]:find("Name",1,true)

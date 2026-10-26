@@ -4418,6 +4418,159 @@ local function whoRuntimePending(f,hud)
   return assert(f.timers[assert(hud.who_display.timer)])
 end
 
+-- Synthetic identities and documentation addresses only. Within each access
+-- level, numeric room order conflicts with IP and name order. Equal rooms,
+-- including differently padded numbers, must retain their input order.
+local whoRuntimeRecords={
+  {"2","Synthetic Zulu","fixture_who_1","Normal","17","192.0.2.250"},
+  {"100","Synthetic Copper","fixture_who_2","GM","02","192.0.2.1"},
+  {"020","Synthetic Zebra","fixture_who_3","ADMIN","003","203.0.113.9"},
+  {"900","Synthetic Summit","fixture_who_4","Sysop","4","203.0.113.200"},
+  {"10","Synthetic Oak","fixture_who_5","gm","15","198.51.100.250"},
+  {"80","Synthetic Harbor","fixture_who_6","Supporter","6","198.51.100.80"},
+  {"20","Synthetic Alpha","fixture_who_7","Admin","007","192.0.2.2"},
+  {"700","Synthetic Lantern","fixture_who_8","Designer","8","2001:db8::7"},
+  {"10","Synthetic Alder","fixture_who_9","Normal","9","192.0.2.1"},
+  {"30","Synthetic Meadow","fixture_who_10","FutureRole","10","2001:db8::30"},
+  {"2","Synthetic Quartz","fixture_who_11","Gm","11","203.0.113.250"},
+  {"10","Synthetic Ash","fixture_who_12","GM","12","192.0.2.2"},
+}
+local whoRuntimeOrder={4,3,7,11,5,12,2,8,6,10,1,9}
+local whoRuntimeAttachments={"Synthetic Companions","Synthetic Followers"}
+local function startWhoRuntime(f)
+  f=f or fake()
+  local hud=Main.new(f,{layout={},edition="staff",chat={enabled=false},mapper={enabled=false}})
+  assert(hud:start()); assert(hud.who_display and hud.who_display.started)
+  eq(f.sentCommands,nil); eq(f.whoBatches,nil)
+  return f,hud
+end
+local function runtimeWhoReport(f,first)
+  local trigger=assert(f.triggers[f.whoTrigger],"missing WHO runtime trigger")
+  local report={slots={},lines={}}; local number=first or 100
+  local function line(text,replace)
+    report.lines[number]=text
+    if replace then report.slots[#report.slots+1]={line_number=number,source_line=text} end
+    trigger(text,number); number=number+1
+  end
+  line("Full who list activated!")
+  line(" Room  Name  Username  Access  Rgn  IP Address",true)
+  for index,item in ipairs(whoRuntimeRecords) do
+    line(string.format("%5s  %-28s  %-24s  %-10s  %3s  %s",unpack(item)),true)
+    if index==5 then
+      for _,label in ipairs(whoRuntimeAttachments) do line("      ("..label..") "..item[3],true) end
+    end
+  end
+  report.footer=number; line("You notice 12 adventurers.")
+  report.prompt=number; line(">")
+  return report
+end
+local function assertWhoRuntimeBatch(f,report,index)
+  local batch=assert((f.whoBatches or {})[index or 1],"missing sorted WHO runtime batch")
+  eq(#batch,#report.slots); eq(#batch,15)
+  for slot,original in ipairs(report.slots) do
+    eq(batch[slot].line_number,original.line_number); eq(batch[slot].source_line,original.source_line)
+    eq(batch[slot].remove,nil); assert(batch[slot].line_number<report.footer)
+  end
+  local header=batch[1].display_text
+  assert(header:match("^%s*Room%s+Name%s+Username%s+Access%s+Rgn%s+IP Address$"))
+  local slot=2
+  for _,recordIndex in ipairs(whoRuntimeOrder) do
+    local expected=whoRuntimeRecords[recordIndex]; local text=batch[slot].display_text
+    local cells={text:match("^%s*(%d+)%s%s+(.-)%s%s+(%S+)%s+(%S+)%s+(%d+)%s+(%S+)%s*$")}
+    eq(#cells,6)
+    for column,value in ipairs(expected) do eq(cells[column],value) end
+    for _,column in ipairs({{2,"Name"},{3,"Username"},{4,"Access"},{6,"IP Address"}}) do
+      eq(text:find(expected[column[1]],1,true),header:find(column[2],1,true))
+    end
+    slot=slot+1
+    if recordIndex==5 then
+      for _,label in ipairs(whoRuntimeAttachments) do
+        local attached,account=batch[slot].display_text:match("^%s+%((.-)%)%s+(%S+)%s*$")
+        eq(attached,label); eq(account,expected[3]); slot=slot+1
+      end
+    end
+  end
+  eq(slot,#batch+1)
+  eq(report.lines[report.footer],"You notice 12 adventurers."); eq(report.lines[report.prompt],">")
+  eq(f.sentCommands,nil)
+end
+
+test("WHO runtime personal who alias observes expanded who all and retains the complete sorted staff report",function()
+  local f=fake(); local personalSends={}
+  local personal=f:addAlias("^who$",function()
+    personalSends[#personalSends+1]="who all"
+    f:emit("sysDataSendRequest","sysDataSendRequest","who all")
+  end)
+  local alias=f.aliases[personal]; local _,hud=startWhoRuntime(f)
+  local outgoing=hud.who_display.onOutgoing; local observed={}
+  hud.who_display.onOutgoing=function(self,command)
+    observed[#observed+1]=command; return outgoing(self,command)
+  end
+  eq(f.aliases[personal],alias); eq(alias.pattern,"^who$")
+  for id,registered in pairs(f.aliases) do
+    if id~=personal then assert(not registered.pattern:lower():find("who",1,true),"HUD added a WHO alias") end
+  end
+  alias.fn(); eq(#personalSends,1); eq(personalSends[1],"who all")
+  eq(#observed,1); eq(observed[1],"who all"); eq(f.sentCommands,nil)
+  local report=runtimeWhoReport(f); eq(f.whoBatches,nil)
+  flushWealthRuntime(f); eq(#(f.whoBatches or {}),1); assertWhoRuntimeBatch(f,report)
+  flushWealthRuntime(f); eq(#f.whoBatches,1); eq(#personalSends,1); eq(#observed,1)
+  hud:shutdown(); eq(f.aliases[personal],alias); eq(next(f.timers),nil); eq(f.sentCommands,nil)
+end)
+
+test("WHO runtime direct who all accepts exact case and space tab variants with access then numeric room sorting",function()
+  local f,hud=startWhoRuntime()
+  for index,command in ipairs({"who all"," WHO ALL ","\tWhO\t aLl \t"}) do
+    f:emit("sysDataSendRequest","sysDataSendRequest",command)
+    local report=runtimeWhoReport(f,index*100)
+    eq(#(f.whoBatches or {}),index-1); flushWealthRuntime(f)
+    eq(#(f.whoBatches or {}),index); assertWhoRuntimeBatch(f,report,index)
+    eq(hud.who_display.response,nil); eq(hud.who_display.pending,nil); eq(hud.who_display.timer,nil)
+  end
+  hud:shutdown(); eq(next(f.timers),nil); eq(f.sentCommands,nil)
+end)
+
+test("WHO runtime bare who retains exact manual variants and all staff columns with stable numeric room ties",function()
+  local f,hud=startWhoRuntime()
+  for index,command in ipairs({"who"," WHO ","\tWhO\t"}) do
+    f:emit("sysDataSendRequest","sysDataSendRequest",command)
+    local report=runtimeWhoReport(f,index*100)
+    eq(#(f.whoBatches or {}),index-1); flushWealthRuntime(f)
+    eq(#(f.whoBatches or {}),index); assertWhoRuntimeBatch(f,report,index)
+  end
+  hud:shutdown(); eq(next(f.timers),nil); eq(f.sentCommands,nil)
+end)
+
+test("WHO runtime sequential who then who all retires stale captures without duplicate output or HUD sends",function()
+  for _,phase in ipairs({"waiting","pending"}) do
+    local f,hud=startWhoRuntime(); local display=hud.who_display
+    f:emit("sysDataSendRequest","sysDataSendRequest","who")
+    if phase=="pending" then runtimeWhoReport(f,100) end
+    local oldTimer=assert(display.timer); local stale=assert(f.timers[oldTimer])
+    f:emit("sysDataSendRequest","sysDataSendRequest","who all")
+    eq(f.timers[oldTimer],nil); eq(f.timer_cancels[oldTimer],1)
+    stale(); eq(f.whoBatches,nil); assert(display.response,"expanded WHO capture was lost")
+    local report=runtimeWhoReport(f,200); local timer=assert(display.timer); local deferred=assert(f.timers[timer])
+    stale(); eq(f.whoBatches,nil); flushWealthRuntime(f)
+    eq(#(f.whoBatches or {}),1); assertWhoRuntimeBatch(f,report)
+    deferred(); stale(); flushWealthRuntime(f); eq(#f.whoBatches,1)
+    eq(display.response,nil); eq(display.pending,nil); eq(display.timer,nil); eq(f.sentCommands,nil)
+    hud:shutdown(); eq(next(f.timers),nil)
+  end
+end)
+
+test("WHO runtime rejects unsolicited reports and other arguments or command chains",function()
+  local f,hud=startWhoRuntime(); runtimeWhoReport(f); flushWealthRuntime(f); eq(f.whoBatches,nil)
+  for _,command in ipairs({"who normal","who all extra","whoall","who allies","say who all","> who all",
+      "who;look","who all;look","who all|look","who all\tlook","who all\nlook","who all\r","who all\0","who\vall"}) do
+    f:emit("sysDataSendRequest","sysDataSendRequest","who"); assert(hud.who_display.response)
+    f:emit("sysDataSendRequest","sysDataSendRequest",command)
+    eq(hud.who_display.response,nil); eq(hud.who_display.pending,nil); eq(hud.who_display.timer,nil)
+    runtimeWhoReport(f); flushWealthRuntime(f); eq(f.whoBatches,nil); eq(f.sentCommands,nil)
+  end
+  hud:shutdown(); eq(next(f.timers),nil)
+end)
+
 test("WHO runtime startup is passive and observes exact manual commands once",function()
   local f=fake(); local hud=Main.new(f,{layout={},edition="staff",chat={enabled=false},mapper={enabled=false}})
   assert(hud:start()); assert(hud.who_display and hud.who_display.started); eq(f.sentCommands,nil); eq(f.whoBatches,nil)
